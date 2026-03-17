@@ -1,0 +1,24 @@
+model:
+  name: cnn
+  in_channels: null  # Will be set dynamically based on EEG shape
+  conv_channels: [32, 64, 128]
+  kernel_size: 3
+  pool_size: 2
+  num_classes: null  # Will be set dynamically
+
+data:
+  metadata_path: data/processed/metadata.csv
+  split_dir: data/splits
+  batch_size: 32
+
+training:
+  num_epochs: 50
+  learning_rate: 0.001
+  weight_decay: 1e-4
+  device: cuda
+  seed: 42
+
+output:
+  checkpoint_dir: outputs/checkpoints
+  log_dir: outputs/logs
+  save_every: 5
