@@ -1,20 +1,17 @@
 # Data
 data/raw/*
 !data/raw/.gitkeep
-data/processed/*
-!data/processed/.gitkeep
+# data/processed/*
+# !data/processed/.gitkeep
 
 # Outputs
 outputs/checkpoints/*
+outputs/wandb/*
 !outputs/checkpoints/.gitkeep
-outputs/logs/*
-!outputs/logs/.gitkeep
-outputs/predictions/*
-!outputs/predictions/.gitkeep
-
-# Report figures (large image files)
-reports/figures/*
-!reports/figures/.gitkeep
+!outputs/figures/
+!outputs/figures/**
+!outputs/logs/
+!outputs/logs/**
 
 # Python
 __pycache__/
@@ -46,3 +43,8 @@ Thumbs.db
 # Temporary files
 *.tmp
 .cache/
+wandb/
+*.wandb
+*.pt
+*.pth
+*.ckpt

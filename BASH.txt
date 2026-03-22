@@ -1,0 +1,28 @@
+interact -p GPU-shared --gres=gpu:v100-32:1 -t 8:00:00 -A cis250019p
+
+set -euo pipefail
+
+cd /jet/home/jye10/Guided-Project
+
+
+module purge
+module load anaconda3
+conda deactivate || true
+conda activate /ocean/projects/cis250019p/mzhang23/TA/envs/IDLS26 && export PYTHONNOUSERSITE=1
+
+python -m scripts.build_metadata \
+  --dataset_root /ocean/projects/cis250019p/gandotra/11785-gp-eeg \
+  --output_csv data/processed/metadata.csv \
+  --class_mapping_json data/processed/class_mapping.json
+
+python -m scripts.make_splits \
+  --metadata_csv data/processed/metadata.csv \
+  --output_dir data/splits \
+  --seed 42
+
+python -m scripts.train_classification \
+  --config configs/classification_baseline.yaml
+
+python -m scripts.eval_classification \
+  --config configs/classification_baseline.yaml
+

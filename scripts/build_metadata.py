@@ -1,90 +1,62 @@
-"""
-Build unified metadata table from raw EEG, labels, and captions.
+"""Build trial-level metadata for low-speed EEG classification."""
 
-Usage:
-    python scripts/build_metadata.py
-"""
-import pandas as pd
-import numpy as np
-from pathlib import Path
+from __future__ import annotations
+
 import argparse
+from pathlib import Path
 
-from src.data_utils import load_metadata, ensure_dir
-
-
-def build_metadata_from_raw(raw_data_dir, output_dir):
-    """
-    Build unified metadata table from raw data.
-
-    Args:
-        raw_data_dir: Path to raw data directory
-        output_dir: Path to output directory for processed data
-
-    Returns:
-        pd.DataFrame: Metadata table with columns:
-            - subject_id
-            - session_id
-            - trial_id
-            - eeg_path
-            - class_label
-            - caption
-            - image_id
-    """
-    raw_dir = Path(raw_data_dir)
-    ensure_dir(output_dir)
-
-    # TODO: Implement metadata building logic
-    # This is a placeholder - adapt to your actual data structure
-
-    # Example structure:
-    metadata = []
-
-    # Iterate through raw data files
-    for subject_dir in sorted(raw_dir.glob('subject_*')):
-        subject_id = subject_dir.name
-
-        for session_dir in sorted(subject_dir.glob('session_*')):
-            session_id = session_dir.name
-
-            for eeg_file in sorted(session_dir.glob('*.npy')):
-                trial_id = eeg_file.stem
-
-                # TODO: Load corresponding labels and captions
-                # Adjust this based on your actual data structure
-                metadata.append({
-                    'subject_id': subject_id,
-                    'session_id': session_id,
-                    'trial_id': trial_id,
-                    'eeg_path': str(eeg_file.absolute()),
-                    'class_label': None,  # Load from label file
-                    'caption': None,  # Load from caption file
-                    'image_id': None  # Load from mapping file
-                })
-
-    # Create DataFrame
-    metadata_df = pd.DataFrame(metadata)
-
-    # Save to CSV
-    output_path = Path(output_dir) / 'metadata.csv'
-    metadata_df.to_csv(output_path, index=False)
-
-    print(f"Metadata saved to {output_path}")
-    print(f"Total samples: {len(metadata_df)}")
-
-    return metadata_df
+from src.data_utils import (
+    MetadataBuildError,
+    build_metadata_table,
+    ensure_dir,
+    save_class_mapping,
+)
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Build metadata from raw data')
-    parser.add_argument('--raw_dir', type=str, default='data/raw',
-                        help='Path to raw data directory')
-    parser.add_argument('--output_dir', type=str, default='data/processed',
-                        help='Path to output directory')
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build low-speed EEG metadata CSV.")
+    parser.add_argument(
+        "--dataset_root",
+        type=Path,
+        default=Path("/ocean/projects/cis250019p/gandotra/11785-gp-eeg"),
+        help="Root directory of the PSC EEG dataset.",
+    )
+    parser.add_argument(
+        "--output_csv",
+        type=Path,
+        default=Path("data/processed/metadata.csv"),
+        help="Output metadata CSV path.",
+    )
+    parser.add_argument(
+        "--class_mapping_json",
+        type=Path,
+        default=Path("data/processed/class_mapping.json"),
+        help="Output class-name to class-label mapping JSON path.",
+    )
+    return parser.parse_args()
 
-    args = parser.parse_args()
 
-    build_metadata_from_raw(args.raw_dir, args.output_dir)
+def main() -> None:
+    args = parse_args()
+
+    try:
+        metadata_df, class_mapping, summary = build_metadata_table(args.dataset_root)
+    except MetadataBuildError as exc:
+        raise SystemExit(f"[build_metadata] ERROR: {exc}") from exc
+
+    ensure_dir(args.output_csv.parent)
+    metadata_df.to_csv(args.output_csv, index=False)
+    save_class_mapping(class_mapping, args.class_mapping_json)
+
+    print(f"[build_metadata] Wrote metadata: {args.output_csv}")
+    print(f"[build_metadata] Wrote class mapping: {args.class_mapping_json}")
+    print("[build_metadata] Summary")
+    for key, value in summary.items():
+        print(f"  - {key}: {value}")
+    print("[build_metadata] Class mapping")
+    for class_name, class_id in sorted(class_mapping.items(), key=lambda kv: kv[1]):
+        print(f"  - {class_id:02d}: {class_name}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

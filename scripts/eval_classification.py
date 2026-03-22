@@ -1,118 +1,146 @@
-"""
-Evaluate classification model.
+"""Evaluate Task 1 EEG classification model on a split."""
 
-Usage:
-    python scripts/eval_classification.py --config configs/classification_baseline.yaml --checkpoint outputs/checkpoints/best_model.pt
-"""
-import torch
-from torch.utils.data import DataLoader
-import yaml
+from __future__ import annotations
+
 import argparse
+import json
 from pathlib import Path
+from typing import Dict
 
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import yaml
+from torch.utils.data import DataLoader
+
+from src.data_utils import ensure_dir
 from src.datasets import EEGClassificationDataset
-from src.models import BaselineMLP, EEGCNN
-from src.losses import CrossEntropyLoss
-from src.train_utils import validate, load_checkpoint
-from src.metrics import compute_accuracy, compute_confusion_matrix, plot_confusion_matrix
+from src.metrics import compute_confusion_matrix, compute_per_subject_accuracy
+from src.models import build_model
+from src.train_utils import evaluate
 
 
-def load_config(config_path):
-    """Load configuration from YAML file"""
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    return config
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Evaluate EEG Task 1 classification baseline.")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/classification_baseline.yaml"),
+        help="Path to YAML config.",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help="Checkpoint path. Defaults to <output_dir>/checkpoints/best_model.pt",
+    )
+    parser.add_argument(
+        "--split_csv",
+        type=Path,
+        default=None,
+        help="Override split CSV path. Defaults to test_split_csv from config.",
+    )
+    return parser.parse_args()
 
 
-def evaluate_classification(config, checkpoint_path, split='test'):
-    """Evaluate classification model"""
-    # Set device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
-
-    # TODO: Load test data
-    # metadata = load_metadata(config['data']['metadata_path'])
-    # test_df = pd.read_csv(Path(config['data']['split_dir']) / f'{split}.csv')
-    # test_dataset = EEGClassificationDataset(metadata, test_df, config['data']['metadata_path'])
-    # test_loader = DataLoader(test_dataset, batch_size=config['data']['batch_size'], shuffle=False)
-
-    # Create model
-    if config['model']['name'] == 'baseline_mlp':
-        model = BaselineMLP(
-            input_dim=1000,  # TODO: Set from data
-            hidden_dims=config['model']['hidden_dims'],
-            num_classes=10  # TODO: Set from data
-        )
-    elif config['model']['name'] == 'cnn':
-        model = EEGCNN(
-            in_channels=1,  # TODO: Set from data
-            conv_channels=config['model']['conv_channels'],
-            kernel_size=config['model']['kernel_size'],
-            pool_size=config['model']['pool_size'],
-            num_classes=10  # TODO: Set from data
-        )
-    else:
-        raise ValueError(f"Unknown model: {config['model']['name']}")
-
-    model = model.to(device)
-
-    # Load checkpoint
-    if checkpoint_path:
-        state_dict = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(state_dict)
-        print(f"Loaded checkpoint from {checkpoint_path}")
-
-    # Evaluate
-    criterion = CrossEntropyLoss()
-    val_loss, val_acc, predictions, targets = validate(model, None, criterion, device)
-
-    print(f"\n{'='*50}")
-    print(f"Evaluation Results ({split} split)")
-    print(f"{'='*50}")
-    print(f"Loss: {val_loss:.4f}")
-    print(f"Accuracy: {val_acc:.2f}%")
-
-    # Compute confusion matrix
-    cm = compute_confusion_matrix(predictions, targets, config['model']['num_classes'])
-    print(f"\nConfusion Matrix:\n{cm}")
-
-    # Save results
-    output_dir = Path(config['output']['log_dir'])
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save confusion matrix plot
-    plot_path = output_dir / f'confusion_matrix_{split}.png'
-    class_names = [f'Class {i}' for i in range(config['model']['num_classes'])]
-    plot_confusion_matrix(cm, class_names, save_path=str(plot_path))
-    print(f"\nSaved confusion matrix to {plot_path}")
-
-    # Save predictions
-    predictions_path = Path('outputs/predictions') / f'{split}_predictions.pt'
-    predictions_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({
-        'predictions': predictions,
-        'targets': targets,
-        'loss': val_loss,
-        'accuracy': val_acc
-    }, predictions_path)
-    print(f"Saved predictions to {predictions_path}")
+def load_config(config_path: Path) -> Dict[str, object]:
+    with config_path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Evaluate classification model')
-    parser.add_argument('--config', type=str, required=True,
-                        help='Path to configuration YAML file')
-    parser.add_argument('--checkpoint', type=str, default=None,
-                        help='Path to checkpoint file')
-    parser.add_argument('--split', type=str, default='test',
-                        choices=['train', 'val', 'test'],
-                        help='Which split to evaluate')
-
-    args = parser.parse_args()
-
-    config = load_config(args.config)
-    evaluate_classification(config, args.checkpoint, args.split)
+def resolve_device(device_name: str) -> torch.device:
+    if device_name == "cuda" and not torch.cuda.is_available():
+        return torch.device("cpu")
+    return torch.device(device_name)
 
 
-if __name__ == '__main__':
+def main() -> None:
+    args = parse_args()
+    cfg = load_config(args.config)
+
+    device = resolve_device(str(cfg["device"]))
+    output_dir = Path(cfg["output_dir"])
+
+    checkpoint_path = args.checkpoint or (output_dir / "checkpoints" / "best_model.pt")
+    split_csv = args.split_csv or Path(cfg["test_split_csv"])
+
+    test_df = pd.read_csv(split_csv)
+    test_dataset = EEGClassificationDataset(
+        test_df,
+        normalization=str(cfg.get("normalization", "none")),
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=int(cfg["batch_size"]),
+        shuffle=False,
+        num_workers=int(cfg["num_workers"]),
+        pin_memory=(device.type == "cuda"),
+    )
+
+    model = build_model(
+        model_name=str(cfg["model_name"]),
+        num_classes=int(cfg["num_classes"]),
+        num_channels=int(cfg.get("num_channels", 122)),
+        num_timesteps=int(cfg.get("num_timesteps", 500)),
+        hidden_dims=cfg.get("hidden_dims", [512, 256]),
+        dropout=float(cfg.get("dropout", 0.3)),
+        temporal_filters=int(cfg.get("temporal_filters", 16)),
+        depth_multiplier=int(cfg.get("depth_multiplier", 2)),
+        separable_filters=int(cfg.get("separable_filters", 32)),
+    ).to(device)
+
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+
+    criterion = nn.CrossEntropyLoss()
+    test_loss, test_acc, y_true, y_pred, subject_ids, metadata_rows = evaluate(
+        model,
+        test_loader,
+        criterion,
+        device,
+        collect_metadata=True,
+    )
+
+    num_classes = int(cfg["num_classes"])
+    conf_mat = compute_confusion_matrix(y_true, y_pred, num_classes=num_classes)
+    per_subject = compute_per_subject_accuracy(y_true, y_pred, subject_ids)
+
+    print(f"[eval] loss={test_loss:.4f} accuracy={test_acc:.4f}")
+    print("[eval] Per-subject accuracy")
+    for sid, acc in per_subject.items():
+        print(f"  - {sid}: {acc:.4f}")
+
+    predictions_dir = ensure_dir(output_dir / "predictions")
+    figures_dir = ensure_dir(output_dir / "figures")
+    logs_dir = ensure_dir(output_dir / "logs")
+
+    pred_df = pd.DataFrame(metadata_rows)
+    pred_df["true_label"] = y_true
+    pred_df["pred_label"] = y_pred
+    pred_df.to_csv(predictions_dir / "test_predictions.csv", index=False)
+
+    np.save(figures_dir / "confusion_matrix.npy", conf_mat)
+    pd.DataFrame(conf_mat).to_csv(figures_dir / "confusion_matrix.csv", index=False)
+
+    metrics_payload = {
+        "loss": float(test_loss),
+        "accuracy": float(test_acc),
+        "num_samples": int(len(y_true)),
+        "checkpoint": str(checkpoint_path),
+        "split_csv": str(split_csv),
+        "per_subject_accuracy": {k: float(v) for k, v in per_subject.items()},
+    }
+    with (logs_dir / "test_metrics.json").open("w", encoding="utf-8") as handle:
+        json.dump(metrics_payload, handle, indent=2)
+
+    print(f"[eval] Saved predictions: {predictions_dir / 'test_predictions.csv'}")
+    print(f"[eval] Saved confusion matrix: {figures_dir / 'confusion_matrix.npy'}")
+    print(f"[eval] Saved metrics JSON: {logs_dir / 'test_metrics.json'}")
+
+
+if __name__ == "__main__":
     main()

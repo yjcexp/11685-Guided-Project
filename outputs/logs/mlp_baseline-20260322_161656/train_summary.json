@@ -1,0 +1,15 @@
+{
+  "best_val_acc": 0.06557692307692307,
+  "best_epoch": 29,
+  "epochs": 30,
+  "device": "cuda",
+  "checkpoint_dir": "outputs/checkpoints/mlp_baseline-20260322_161656",
+  "num_train_samples": 15600,
+  "num_val_samples": 5200,
+  "best_checkpoint": "outputs/checkpoints/mlp_baseline-20260322_161656/best_model.pt",
+  "last_checkpoint": "outputs/checkpoints/mlp_baseline-20260322_161656/last_model.pt",
+  "history_csv": "outputs/mlp_baseline-20260322_161656/logs/train_history.csv",
+  "history_json": "outputs/mlp_baseline-20260322_161656/logs/train_history.json",
+  "loss_curve": "outputs/mlp_baseline-20260322_161656/figures/train_val_loss.png",
+  "acc_curve": "outputs/mlp_baseline-20260322_161656/figures/train_val_accuracy.png"
+}

@@ -1,78 +1,58 @@
-"""Evaluation metrics for classification and retrieval"""
-import torch
+"""Metrics for EEG classification."""
+
+from __future__ import annotations
+
+from typing import Dict, Iterable, Sequence
+
 import numpy as np
-from sklearn.metrics import accuracy_score, confusion_matrix, recall_score
-import matplotlib.pyplot as plt
+import torch
 
 
-def compute_accuracy(predictions, targets):
-    """Compute classification accuracy"""
-    preds = predictions.argmax(dim=-1).cpu().numpy()
-    targets_np = targets.cpu().numpy()
-    return accuracy_score(targets_np, preds)
+def _to_numpy(x: np.ndarray | torch.Tensor | Sequence[int]) -> np.ndarray:
+    if isinstance(x, np.ndarray):
+        return x
+    if isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy()
+    return np.asarray(x)
 
 
-def compute_confusion_matrix(predictions, targets, num_classes):
-    """Compute confusion matrix"""
-    preds = predictions.argmax(dim=-1).cpu().numpy()
-    targets_np = targets.cpu().numpy()
-    return confusion_matrix(targets_np, preds, labels=range(num_classes))
+def compute_accuracy(logits: torch.Tensor, labels: torch.Tensor) -> float:
+    """Compute batch accuracy from logits and integer labels."""
+    preds = torch.argmax(logits, dim=1)
+    return float((preds == labels).float().mean().item())
 
 
-def compute_recall_at_k(query_embeddings, target_embeddings, k_values=[1, 5, 10]):
-    """Compute Recall@K for retrieval"""
-    # Normalize embeddings
-    query_embeddings = query_embeddings / query_embeddings.norm(dim=-1, keepdim=True)
-    target_embeddings = target_embeddings / target_embeddings.norm(dim=-1, keepdim=True)
+def compute_confusion_matrix(
+    y_true: np.ndarray | torch.Tensor | Sequence[int],
+    y_pred: np.ndarray | torch.Tensor | Sequence[int],
+    num_classes: int,
+) -> np.ndarray:
+    """Compute confusion matrix with shape [num_classes, num_classes]."""
+    true_np = _to_numpy(y_true).astype(np.int64)
+    pred_np = _to_numpy(y_pred).astype(np.int64)
 
-    # Compute similarity scores
-    similarity = torch.matmul(query_embeddings, target_embeddings.T)
-
-    results = {}
-    for k in k_values:
-        # Get top-k predictions
-        _, top_k_indices = similarity.topk(k, dim=-1)
-
-        # Compute recall (assuming targets are on diagonal)
-        batch_size = similarity.size(0)
-        labels = torch.arange(batch_size, device=similarity.device).unsqueeze(-1)
-
-        recall = (top_k_indices == labels).any(dim=-1).float().mean().item()
-        results[f'Recall@{k}'] = recall
-
-    return results
+    cm = np.zeros((num_classes, num_classes), dtype=np.int64)
+    for t, p in zip(true_np, pred_np):
+        if t < 0 or t >= num_classes or p < 0 or p >= num_classes:
+            raise ValueError(f"Label out of range for confusion matrix: y_true={t}, y_pred={p}")
+        cm[t, p] += 1
+    return cm
 
 
-def plot_confusion_matrix(cm, class_names, save_path=None):
-    """Plot confusion matrix"""
-    fig, ax = plt.subplots(figsize=(10, 8))
-    im = ax.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
-    ax.figure.colorbar(im, ax=ax)
+def compute_per_subject_accuracy(
+    y_true: np.ndarray | torch.Tensor | Sequence[int],
+    y_pred: np.ndarray | torch.Tensor | Sequence[int],
+    subject_ids: Sequence[str],
+) -> Dict[str, float]:
+    """Compute per-subject classification accuracy."""
+    true_np = _to_numpy(y_true).astype(np.int64)
+    pred_np = _to_numpy(y_pred).astype(np.int64)
 
-    ax.set(xticks=np.arange(cm.shape[1]),
-           yticks=np.arange(cm.shape[0]),
-           xticklabels=class_names,
-           yticklabels=class_names,
-           title='Confusion Matrix',
-           ylabel='True label',
-           xlabel='Predicted label')
+    if len(true_np) != len(subject_ids) or len(pred_np) != len(subject_ids):
+        raise ValueError("Lengths of y_true, y_pred, and subject_ids must match.")
 
-    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+    by_subject: Dict[str, list[bool]] = {}
+    for t, p, sid in zip(true_np, pred_np, subject_ids):
+        by_subject.setdefault(str(sid), []).append(int(t == p))
 
-    fmt = 'd'
-    thresh = cm.max() / 2.
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            ax.text(j, i, format(cm[i, j], fmt),
-                    ha="center", va="center",
-                    color="white" if cm[i, j] > thresh else "black")
-
-    fig.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-    else:
-        plt.show()
-
-    return fig
+    return {sid: float(np.mean(matches)) for sid, matches in sorted(by_subject.items())}

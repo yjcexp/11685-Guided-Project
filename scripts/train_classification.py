@@ -1,132 +1,293 @@
-"""
-Train classification model for EEG signals.
+"""Train Task 1 EEG 20-way classification baseline."""
 
-Usage:
-    python scripts/train_classification.py --config configs/classification_baseline.yaml
-"""
-import torch
-from torch.utils.data import DataLoader
-import yaml
+from __future__ import annotations
+
 import argparse
+import json
+from datetime import datetime
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
+import matplotlib.pyplot as plt
+import pandas as pd
+import torch
+import torch.nn as nn
+import yaml
+from torch.utils.data import DataLoader
+
+from src.data_utils import ensure_dir
 from src.datasets import EEGClassificationDataset
-from src.models import BaselineMLP, EEGCNN
-from src.losses import CrossEntropyLoss
-from src.train_utils import (
-    train_one_epoch, validate, save_checkpoint,
-    get_optimizer, get_scheduler
-)
+from src.models import build_model
+from src.train_utils import evaluate, save_checkpoint, set_seed, train_one_epoch
 
 
-def load_config(config_path):
-    """Load configuration from YAML file"""
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    return config
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train EEG Task 1 classification baseline.")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/classification_baseline.yaml"),
+        help="Path to YAML config.",
+    )
+    return parser.parse_args()
 
 
-def train_classification(config):
-    """Train classification model"""
-    # Set device
-    device = torch.device(config['training']['device'] if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+def load_config(config_path: Path) -> Dict[str, object]:
+    with config_path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
 
-    # Set random seed
-    torch.manual_seed(config['training']['seed'])
 
-    # TODO: Load data
-    # metadata = load_metadata(config['data']['metadata_path'])
-    # train_df = pd.read_csv(Path(config['data']['split_dir']) / 'train.csv')
-    # val_df = pd.read_csv(Path(config['data']['split_dir']) / 'val.csv')
+def resolve_device(device_name: str) -> torch.device:
+    if device_name == "cuda" and not torch.cuda.is_available():
+        return torch.device("cpu")
+    return torch.device(device_name)
 
-    # TODO: Create datasets and dataloaders
-    # train_dataset = EEGClassificationDataset(metadata, train_df, config['data']['metadata_path'])
-    # val_dataset = EEGClassificationDataset(metadata, val_df, config['data']['metadata_path'])
 
-    # train_loader = DataLoader(train_dataset, batch_size=config['data']['batch_size'], shuffle=True)
-    # val_loader = DataLoader(val_dataset, batch_size=config['data']['batch_size'], shuffle=False)
+def init_wandb(cfg: Dict[str, object], output_dir: Path) -> Tuple[Optional[object], Optional[str]]:
+    wandb_cfg = cfg.get("wandb", {})
+    enabled = bool(wandb_cfg.get("enabled", False))
+    if not enabled:
+        return None, None
 
-    # TODO: Determine model dimensions from data
-    # sample_data = train_dataset[0][0]
-    # input_dim = sample_data.numel()
+    try:
+        import wandb  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "wandb is enabled in config but not installed. Install with: pip install wandb"
+        ) from exc
 
-    # Create model
-    if config['model']['name'] == 'baseline_mlp':
-        # TODO: Set actual input_dim and num_classes
-        model = BaselineMLP(
-            input_dim=1000,  # TODO: Set from data
-            hidden_dims=config['model']['hidden_dims'],
-            num_classes=10  # TODO: Set from data
-        )
-    elif config['model']['name'] == 'cnn':
-        model = EEGCNN(
-            in_channels=1,  # TODO: Set from data
-            conv_channels=config['model']['conv_channels'],
-            kernel_size=config['model']['kernel_size'],
-            pool_size=config['model']['pool_size'],
-            num_classes=10  # TODO: Set from data
-        )
-    else:
-        raise ValueError(f"Unknown model: {config['model']['name']}")
+    model_name = str(cfg.get("model_name", "model"))
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    resolved_run_name = str(wandb_cfg.get("run_name") or f"{model_name}-{timestamp}")
+    resolved_entity = str(wandb_cfg.get("entity", "yejc20"))
+    resolved_project = str(wandb_cfg.get("project", "eeg-task1"))
 
-    model = model.to(device)
+    run_config = {
+        "model_name": cfg.get("model_name"),
+        "batch_size": cfg.get("batch_size"),
+        "lr": cfg.get("lr"),
+        "weight_decay": cfg.get("weight_decay"),
+        "epochs": cfg.get("epochs"),
+        "normalization": cfg.get("normalization"),
+        "seed": cfg.get("seed"),
+    }
 
-    # Loss and optimizer
-    criterion = CrossEntropyLoss()
-    optimizer = get_optimizer(
-        model,
-        lr=config['training']['learning_rate'],
-        weight_decay=config['training']['weight_decay']
+    run = wandb.init(
+        project=resolved_project,
+        entity=resolved_entity,
+        name=resolved_run_name,
+        mode=str(wandb_cfg.get("mode", "online")),
+        config=run_config,
+        dir=str(output_dir),
+    )
+    return run, resolved_run_name
+
+
+def save_training_plots(history_df: pd.DataFrame, figures_dir: Path) -> Dict[str, Path]:
+    ensure_dir(figures_dir)
+
+    loss_path = figures_dir / "train_val_loss.png"
+    acc_path = figures_dir / "train_val_accuracy.png"
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(history_df["epoch"], history_df["train_loss"], label="train_loss")
+    plt.plot(history_df["epoch"], history_df["val_loss"], label="val_loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training and Validation Loss")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(loss_path, dpi=200)
+    plt.close()
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(history_df["epoch"], history_df["train_acc"], label="train_acc")
+    plt.plot(history_df["epoch"], history_df["val_acc"], label="val_acc")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.title("Training and Validation Accuracy")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(acc_path, dpi=200)
+    plt.close()
+
+    return {"loss_curve": loss_path, "acc_curve": acc_path}
+
+
+def main() -> None:
+    args = parse_args()
+    cfg = load_config(args.config)
+
+    set_seed(int(cfg["seed"]))
+    device = resolve_device(str(cfg["device"]))
+
+    output_dir = Path(cfg["output_dir"])
+    checkpoints_root = ensure_dir(output_dir / "checkpoints")
+    model_name = str(cfg["model_name"])
+    run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    checkpoints_dir = ensure_dir(checkpoints_root / f"{model_name}-{run_timestamp}")
+    logs_dir = ensure_dir(output_dir / "logs" / f"{model_name}-{run_timestamp}")
+    figures_dir = ensure_dir(output_dir / "figures"/ f"{model_name}-{run_timestamp}")
+
+    wandb_run, wandb_run_name = init_wandb(cfg, output_dir)
+
+    train_df = pd.read_csv(cfg["train_split_csv"])
+    val_df = pd.read_csv(cfg["val_split_csv"])
+
+    train_dataset = EEGClassificationDataset(
+        train_df,
+        normalization=str(cfg.get("normalization", "none")),
+    )
+    val_dataset = EEGClassificationDataset(
+        val_df,
+        normalization=str(cfg.get("normalization", "none")),
     )
 
-    scheduler = get_scheduler(
-        optimizer,
-        config['training']['num_epochs']
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=int(cfg["batch_size"]),
+        shuffle=True,
+        num_workers=int(cfg["num_workers"]),
+        pin_memory=(device.type == "cuda"),
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=int(cfg["batch_size"]),
+        shuffle=False,
+        num_workers=int(cfg["num_workers"]),
+        pin_memory=(device.type == "cuda"),
     )
 
-    # Training loop
-    best_val_loss = float('inf')
-    for epoch in range(1, config['training']['num_epochs'] + 1):
-        print(f"\nEpoch {epoch}/{config['training']['num_epochs']}")
-        print("-" * 50)
+    model = build_model(
+        model_name=str(cfg["model_name"]),
+        num_classes=int(cfg["num_classes"]),
+        num_channels=int(cfg.get("num_channels", 122)),
+        num_timesteps=int(cfg.get("num_timesteps", 500)),
+        hidden_dims=cfg.get("hidden_dims", [512, 256]),
+        dropout=float(cfg.get("dropout", 0.3)),
+        temporal_filters=int(cfg.get("temporal_filters", 16)),
+        depth_multiplier=int(cfg.get("depth_multiplier", 2)),
+        separable_filters=int(cfg.get("separable_filters", 32)),
+    ).to(device)
 
-        # Train
-        train_loss, train_acc = train_one_epoch(model, None, criterion, optimizer, device)
-        print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=float(cfg["lr"]),
+        weight_decay=float(cfg["weight_decay"]),
+    )
 
-        # Validate
-        val_loss, val_acc, _, _ = validate(model, None, criterion, device)
-        print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
+    best_val_acc = -1.0
+    best_epoch = -1
+    history: List[Dict[str, float]] = []
 
-        # Update learning rate
-        scheduler.step()
+    epochs = int(cfg["epochs"])
+    for epoch in range(1, epochs + 1):
+        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
+        val_loss, val_acc, _, _, _, _ = evaluate(model, val_loader, criterion, device)
 
-        # Save checkpoint
-        if epoch % config['output']['save_every'] == 0:
+        epoch_log = {
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "train_acc": train_acc,
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+            "lr": optimizer.param_groups[0]["lr"],
+        }
+        history.append(epoch_log)
+
+        print(
+            f"[train] epoch={epoch:03d}/{epochs} "
+            f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} "
+            f"val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
+        )
+
+        if wandb_run is not None:
+            wandb_run.log(epoch_log)
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_epoch = epoch
             save_checkpoint(
-                model, optimizer, epoch, val_loss, val_acc,
-                config['output']['checkpoint_dir']
+                checkpoint_path=checkpoints_dir / "best_model.pt",
+                model=model,
+                optimizer=optimizer,
+                epoch=epoch,
+                best_val_acc=best_val_acc,
+                config=cfg,
             )
 
-        # Save best model
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            best_checkpoint_path = Path(config['output']['checkpoint_dir']) / 'best_model.pt'
-            torch.save(model.state_dict(), best_checkpoint_path)
-            print(f"Saved best model with val_loss: {val_loss:.4f}")
+    # Save last checkpoint too.
+    save_checkpoint(
+        checkpoint_path=checkpoints_dir / "last_model.pt",
+        model=model,
+        optimizer=optimizer,
+        epoch=epochs,
+        best_val_acc=best_val_acc,
+        config=cfg,
+    )
+
+    history_df = pd.DataFrame(history)
+    history_csv = logs_dir / "train_history.csv"
+    history_json = logs_dir / "train_history.json"
+    history_df.to_csv(history_csv, index=False)
+    with history_json.open("w", encoding="utf-8") as handle:
+        json.dump(history, handle, indent=2)
+
+    plot_paths = save_training_plots(history_df, figures_dir)
+
+    summary = {
+        "best_val_acc": float(best_val_acc),
+        "best_epoch": int(best_epoch),
+        "epochs": int(epochs),
+        "device": str(device),
+        "checkpoint_dir": str(checkpoints_dir),
+        "num_train_samples": int(len(train_dataset)),
+        "num_val_samples": int(len(val_dataset)),
+        "best_checkpoint": str(checkpoints_dir / "best_model.pt"),
+        "last_checkpoint": str(checkpoints_dir / "last_model.pt"),
+        "history_csv": str(history_csv),
+        "history_json": str(history_json),
+        "loss_curve": str(plot_paths["loss_curve"]),
+        "acc_curve": str(plot_paths["acc_curve"]),
+    }
+    summary_json = logs_dir / "train_summary.json"
+    with summary_json.open("w", encoding="utf-8") as handle:
+        json.dump(summary, handle, indent=2)
+
+    if wandb_run_name is not None:
+        wandb_info_path = logs_dir / "wandb_run.json"
+        with wandb_info_path.open("w", encoding="utf-8") as handle:
+            json.dump({"run_name": wandb_run_name}, handle, indent=2)
+
+    if wandb_run is not None:
+        try:
+            import wandb  # type: ignore
+
+            wandb_run.log({
+                "best_val_acc": best_val_acc,
+                "best_epoch": best_epoch,
+            })
+            wandb_run.log(
+                {
+                    "loss_curve": wandb.Image(str(plot_paths["loss_curve"])),
+                    "acc_curve": wandb.Image(str(plot_paths["acc_curve"])),
+                }
+            )
+        finally:
+            wandb_run.finish()
+
+    print(f"[train] Best val_acc={best_val_acc:.4f} at epoch={best_epoch}")
+    print(f"[train] Checkpoint dir: {checkpoints_dir}")
+    print(f"[train] Saved checkpoint: {checkpoints_dir / 'best_model.pt'}")
+    print(f"[train] Saved last checkpoint: {checkpoints_dir / 'last_model.pt'}")
+    print(f"[train] Saved history CSV: {history_csv}")
+    print(f"[train] Saved history JSON: {history_json}")
+    print(f"[train] Saved training summary: {summary_json}")
+    print(f"[train] Saved curves: {plot_paths['loss_curve']}, {plot_paths['acc_curve']}")
+    if wandb_run_name is not None:
+        print(f"[train] Wandb run name: {wandb_run_name}")
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Train classification model')
-    parser.add_argument('--config', type=str, required=True,
-                        help='Path to configuration YAML file')
-
-    args = parser.parse_args()
-
-    config = load_config(args.config)
-    train_classification(config)
-
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
