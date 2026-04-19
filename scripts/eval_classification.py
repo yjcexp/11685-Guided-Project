@@ -114,9 +114,16 @@ def main() -> None:
     for sid, acc in per_subject.items():
         print(f"  - {sid}: {acc:.4f}")
 
-    predictions_dir = ensure_dir(output_dir / "predictions")
-    figures_dir = ensure_dir(output_dir / "figures")
-    logs_dir = ensure_dir(output_dir / "logs")
+    # Derive a per-eval tag from the config filename so that multiple
+    # evaluations (baseline + ablations sharing the same model_name) do not
+    # overwrite each other's outputs.
+    eval_tag = args.config.stem
+    if eval_tag.startswith("classification_"):
+        eval_tag = eval_tag[len("classification_") :]
+
+    predictions_dir = ensure_dir(output_dir / "predictions" / eval_tag)
+    figures_dir = ensure_dir(output_dir / "figures" / eval_tag)
+    logs_dir = ensure_dir(output_dir / "logs" / eval_tag)
 
     pred_df = pd.DataFrame(metadata_rows)
     pred_df["true_label"] = y_true
@@ -127,6 +134,8 @@ def main() -> None:
     pd.DataFrame(conf_mat).to_csv(figures_dir / "confusion_matrix.csv", index=False)
 
     metrics_payload = {
+        "eval_tag": eval_tag,
+        "config": str(args.config),
         "loss": float(test_loss),
         "accuracy": float(test_acc),
         "num_samples": int(len(y_true)),
