@@ -15,7 +15,7 @@ import yaml
 from torch.utils.data import DataLoader
 
 from src.data_utils import ensure_dir
-from src.datasets import EEGClassificationDataset
+from src.datasets import EEGClassificationDataset, build_normalization_state
 from src.metrics import compute_confusion_matrix, compute_per_subject_accuracy
 from src.models import build_model
 from src.train_utils import build_subject_id_mapping, evaluate, model_requires_subject_ids
@@ -60,10 +60,6 @@ def resolve_checkpoint_path(output_dir: Path, model_name: str, checkpoint_path: 
         return checkpoint_path
 
     checkpoints_root = output_dir / "checkpoints"
-    direct_path = checkpoints_root / "best_model.pt"
-    if direct_path.exists():
-        return direct_path
-
     pattern = f"{model_name}-*"
     candidate_dirs = [path for path in checkpoints_root.glob(pattern) if path.is_dir()]
     candidate_dirs = sorted(candidate_dirs, key=lambda path: path.name, reverse=True)
@@ -72,7 +68,80 @@ def resolve_checkpoint_path(output_dir: Path, model_name: str, checkpoint_path: 
         if candidate_checkpoint.exists():
             return candidate_checkpoint
 
+    direct_path = checkpoints_root / "best_model.pt"
+    if direct_path.exists():
+        return direct_path
+
     return direct_path
+
+
+def resolve_eval_run_name(checkpoint_path: Path, model_name: str) -> str:
+    checkpoint_parent = checkpoint_path.parent
+    if checkpoint_parent.name.startswith(f"{model_name}-"):
+        return checkpoint_parent.name
+    return f"{model_name}-eval"
+
+
+def build_per_class_accuracy_df(y_true: np.ndarray, y_pred: np.ndarray, num_classes: int) -> pd.DataFrame:
+    rows = []
+    for class_label in range(num_classes):
+        mask = y_true == class_label
+        num_samples = int(mask.sum())
+        accuracy = float((y_pred[mask] == y_true[mask]).mean()) if num_samples > 0 else float("nan")
+        rows.append(
+            {
+                "class_label": class_label,
+                "num_samples": num_samples,
+                "accuracy": accuracy,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_predicted_label_distribution_df(y_true: np.ndarray, y_pred: np.ndarray, num_classes: int) -> pd.DataFrame:
+    true_counts = np.bincount(y_true, minlength=num_classes)
+    pred_counts = np.bincount(y_pred, minlength=num_classes)
+    rows = []
+    for class_label in range(num_classes):
+        rows.append(
+            {
+                "class_label": class_label,
+                "true_count": int(true_counts[class_label]),
+                "pred_count": int(pred_counts[class_label]),
+                "pred_fraction": float(pred_counts[class_label] / max(len(y_pred), 1)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_per_subject_metrics_df(pred_df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for subject_id, subject_df in pred_df.groupby("subject_id", sort=True):
+        num_samples = int(len(subject_df))
+        accuracy = float((subject_df["true_label"] == subject_df["pred_label"]).mean()) if num_samples > 0 else float("nan")
+        rows.append(
+            {
+                "subject_id": str(subject_id),
+                "num_samples": num_samples,
+                "accuracy": accuracy,
+                "num_true_classes": int(subject_df["true_label"].nunique()),
+                "num_pred_classes": int(subject_df["pred_label"].nunique()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def resolve_num_timesteps(cfg: Dict[str, object]) -> int:
+    total_timesteps = int(cfg.get("num_timesteps", 500))
+    time_window_start = int(cfg.get("time_window_start", 0))
+    time_window_end = cfg.get("time_window_end")
+    end = total_timesteps if time_window_end is None else int(time_window_end)
+    if not (0 <= time_window_start < end <= total_timesteps):
+        raise ValueError(
+            "Invalid time window configuration. "
+            f"Expected 0 <= start < end <= {total_timesteps}, got start={time_window_start}, end={end}."
+        )
+    return end - time_window_start
 
 
 def main() -> None:
@@ -83,14 +152,27 @@ def main() -> None:
     output_dir = Path(cfg["output_dir"])
 
     model_name = str(cfg["model_name"])
+    resolved_num_timesteps = resolve_num_timesteps(cfg)
     requires_subject_ids = model_requires_subject_ids(model_name)
     checkpoint_path = resolve_checkpoint_path(output_dir, model_name, args.checkpoint)
     split_csv = args.split_csv or Path(cfg["test_split_csv"])
+    split_name = Path(split_csv).stem
 
+    train_df = pd.read_csv(cfg["train_split_csv"])
+    normalization = str(cfg.get("normalization", "none"))
+    normalization_state = build_normalization_state(
+        train_df,
+        normalization=normalization,
+        time_window_start=int(cfg.get("time_window_start", 0)),
+        time_window_end=cfg.get("time_window_end"),
+    )
     test_df = pd.read_csv(split_csv)
     test_dataset = EEGClassificationDataset(
         test_df,
-        normalization=str(cfg.get("normalization", "none")),
+        normalization=normalization,
+        normalization_state=normalization_state,
+        time_window_start=int(cfg.get("time_window_start", 0)),
+        time_window_end=cfg.get("time_window_end"),
     )
     test_loader = DataLoader(
         test_dataset,
@@ -102,14 +184,13 @@ def main() -> None:
 
     subject_id_to_index = None
     if requires_subject_ids:
-        train_df = pd.read_csv(cfg["train_split_csv"])
         subject_id_to_index = build_subject_id_mapping(train_df["subject_id"].astype(str).tolist())
 
     model = build_model(
         model_name=model_name,
         num_classes=int(cfg["num_classes"]),
         num_channels=int(cfg.get("num_channels", 122)),
-        num_timesteps=int(cfg.get("num_timesteps", 500)),
+        num_timesteps=resolved_num_timesteps,
         num_subjects=len(subject_id_to_index) if subject_id_to_index is not None else int(cfg.get("num_subjects", 13)),
         cnn_out_channels=int(cfg.get("cnn_out_channels", 64)),
         d_model=int(cfg.get("d_model", 128)),
@@ -123,6 +204,18 @@ def main() -> None:
         temporal_filters=int(cfg.get("temporal_filters", 16)),
         depth_multiplier=int(cfg.get("depth_multiplier", 2)),
         separable_filters=int(cfg.get("separable_filters", 32)),
+        branch_kernel_sizes=cfg.get("branch_kernel_sizes", [15, 31, 63]),
+        num_refinement_blocks=int(cfg.get("num_refinement_blocks", 2)),
+        refinement_kernel_size=int(cfg.get("refinement_kernel_size", 15)),
+        stem_pool_kernel=int(cfg.get("stem_pool_kernel", 4)),
+        embedding_dim=int(cfg.get("embedding_dim", 256)),
+        projection_dim=cfg.get("projection_dim"),
+        projection_hidden_dim=cfg.get("projection_hidden_dim"),
+        projection_dropout=float(cfg.get("projection_dropout", 0.0)),
+        normalize_projected_embedding=bool(cfg.get("normalize_projected_embedding", False)),
+        subject_embedding_dim=int(cfg.get("subject_embedding_dim", 32)),
+        classifier_hidden_dim=int(cfg.get("classifier_hidden_dim", 128)),
+        fuse_mode=str(cfg.get("fuse_mode", "concat")),
     ).to(device)
 
     if not checkpoint_path.exists():
@@ -130,6 +223,15 @@ def main() -> None:
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
     checkpoint_cfg = checkpoint.get("config", {})
+    checkpoint_model_name = None
+    if isinstance(checkpoint_cfg, dict):
+        checkpoint_model_name = checkpoint_cfg.get("model_name")
+    if checkpoint_model_name is not None and str(checkpoint_model_name) != model_name:
+        raise RuntimeError(
+            "Checkpoint model_name does not match the requested config model_name. "
+            f"Requested {model_name!r}, but checkpoint at {checkpoint_path} was saved for "
+            f"{checkpoint_model_name!r}. Pass --checkpoint explicitly or use the matching config."
+        )
     if requires_subject_ids and isinstance(checkpoint_cfg, dict) and "subject_id_to_index" in checkpoint_cfg:
         subject_id_to_index = {
             str(subject_id): int(subject_index)
@@ -157,17 +259,32 @@ def main() -> None:
     for sid, acc in per_subject.items():
         print(f"  - {sid}: {acc:.4f}")
 
-    predictions_dir = ensure_dir(output_dir / "predictions")
-    figures_dir = ensure_dir(output_dir / "figures")
-    logs_dir = ensure_dir(output_dir / "logs")
+    eval_run_name = resolve_eval_run_name(checkpoint_path, model_name)
+    predictions_dir = ensure_dir(output_dir / "predictions" / eval_run_name)
+    figures_dir = ensure_dir(output_dir / "figures" / eval_run_name)
+    logs_dir = ensure_dir(output_dir / "logs" / eval_run_name)
 
     pred_df = pd.DataFrame(metadata_rows)
     pred_df["true_label"] = y_true
     pred_df["pred_label"] = y_pred
-    pred_df.to_csv(predictions_dir / "test_predictions.csv", index=False)
+    predictions_path = predictions_dir / f"{split_name}_predictions.csv"
+    pred_df.to_csv(predictions_path, index=False)
 
-    np.save(figures_dir / "confusion_matrix.npy", conf_mat)
-    pd.DataFrame(conf_mat).to_csv(figures_dir / "confusion_matrix.csv", index=False)
+    per_class_accuracy_df = build_per_class_accuracy_df(y_true, y_pred, num_classes=num_classes)
+    predicted_label_distribution_df = build_predicted_label_distribution_df(y_true, y_pred, num_classes=num_classes)
+    per_subject_metrics_df = build_per_subject_metrics_df(pred_df)
+
+    per_class_accuracy_path = logs_dir / f"{split_name}_per_class_accuracy.csv"
+    predicted_label_distribution_path = logs_dir / f"{split_name}_predicted_label_distribution.csv"
+    per_subject_metrics_path = logs_dir / f"{split_name}_per_subject_metrics.csv"
+    per_class_accuracy_df.to_csv(per_class_accuracy_path, index=False)
+    predicted_label_distribution_df.to_csv(predicted_label_distribution_path, index=False)
+    per_subject_metrics_df.to_csv(per_subject_metrics_path, index=False)
+
+    confusion_matrix_npy_path = figures_dir / f"{split_name}_confusion_matrix.npy"
+    confusion_matrix_csv_path = figures_dir / f"{split_name}_confusion_matrix.csv"
+    np.save(confusion_matrix_npy_path, conf_mat)
+    pd.DataFrame(conf_mat).to_csv(confusion_matrix_csv_path, index=False)
 
     metrics_payload = {
         "loss": float(test_loss),
@@ -179,12 +296,16 @@ def main() -> None:
     }
     if subject_id_to_index is not None:
         metrics_payload["subject_id_to_index"] = subject_id_to_index
-    with (logs_dir / "test_metrics.json").open("w", encoding="utf-8") as handle:
+    metrics_json_path = logs_dir / f"{split_name}_metrics.json"
+    with metrics_json_path.open("w", encoding="utf-8") as handle:
         json.dump(metrics_payload, handle, indent=2)
 
-    print(f"[eval] Saved predictions: {predictions_dir / 'test_predictions.csv'}")
-    print(f"[eval] Saved confusion matrix: {figures_dir / 'confusion_matrix.npy'}")
-    print(f"[eval] Saved metrics JSON: {logs_dir / 'test_metrics.json'}")
+    print(f"[eval] Saved predictions: {predictions_path}")
+    print(f"[eval] Saved confusion matrix: {confusion_matrix_npy_path}")
+    print(f"[eval] Saved metrics JSON: {metrics_json_path}")
+    print(f"[eval] Saved per-class accuracy: {per_class_accuracy_path}")
+    print(f"[eval] Saved predicted-label distribution: {predicted_label_distribution_path}")
+    print(f"[eval] Saved per-subject metrics: {per_subject_metrics_path}")
 
 
 if __name__ == "__main__":

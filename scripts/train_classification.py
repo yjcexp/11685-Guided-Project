@@ -16,7 +16,7 @@ import yaml
 from torch.utils.data import DataLoader
 
 from src.data_utils import ensure_dir
-from src.datasets import EEGClassificationDataset
+from src.datasets import EEGClassificationDataset, build_normalization_state
 from src.models import build_model
 from src.train_utils import (
     build_subject_id_mapping,
@@ -77,6 +77,8 @@ def init_wandb(cfg: Dict[str, object], output_dir: Path) -> Tuple[Optional[objec
         "epochs": cfg.get("epochs"),
         "normalization": cfg.get("normalization"),
         "seed": cfg.get("seed"),
+        "label_smoothing": cfg.get("label_smoothing", 0.0),
+        "scheduler": cfg.get("scheduler", "none"),
     }
 
     run = wandb.init(
@@ -136,6 +138,39 @@ def log_split_diagnostics(train_df: pd.DataFrame, val_df: pd.DataFrame) -> None:
     print(val_df.groupby("subject_id")["class_label"].nunique().sort_index().to_string())
 
 
+def build_scheduler(
+    optimizer: torch.optim.Optimizer,
+    cfg: Dict[str, object],
+    epochs: int,
+) -> torch.optim.lr_scheduler._LRScheduler | None:
+    scheduler_name = str(cfg.get("scheduler", "none")).strip().lower()
+    if scheduler_name in {"none", ""}:
+        return None
+    if scheduler_name == "cosine":
+        eta_min = float(cfg.get("scheduler_eta_min", 0.0))
+        return torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=max(epochs, 1),
+            eta_min=eta_min,
+        )
+    raise ValueError(
+        f"Unsupported scheduler={scheduler_name!r}. Expected one of: 'none', 'cosine'."
+    )
+
+
+def resolve_num_timesteps(cfg: Dict[str, object]) -> int:
+    total_timesteps = int(cfg.get("num_timesteps", 500))
+    time_window_start = int(cfg.get("time_window_start", 0))
+    time_window_end = cfg.get("time_window_end")
+    end = total_timesteps if time_window_end is None else int(time_window_end)
+    if not (0 <= time_window_start < end <= total_timesteps):
+        raise ValueError(
+            "Invalid time window configuration. "
+            f"Expected 0 <= start < end <= {total_timesteps}, got start={time_window_start}, end={end}."
+        )
+    return end - time_window_start
+
+
 def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
@@ -165,6 +200,7 @@ def main() -> None:
         print(f"[debug] Using tiny training subset: {tiny_subset_size} samples (seed={tiny_subset_seed})")
 
     cfg = dict(cfg)
+    resolved_num_timesteps = resolve_num_timesteps(cfg)
     requires_subject_ids = model_requires_subject_ids(model_name)
     subject_id_to_index = None
     if requires_subject_ids:
@@ -172,13 +208,29 @@ def main() -> None:
         cfg["subject_id_to_index"] = subject_id_to_index
         cfg["num_subjects"] = len(subject_id_to_index)
 
+    normalization = str(cfg.get("normalization", "none"))
+    normalization_state = build_normalization_state(
+        train_df,
+        normalization=normalization,
+        time_window_start=int(cfg.get("time_window_start", 0)),
+        time_window_end=cfg.get("time_window_end"),
+    )
+    if normalization_state is not None:
+        print(f"[data] Fitted normalization state for mode={normalization}")
+
     train_dataset = EEGClassificationDataset(
         train_df,
-        normalization=str(cfg.get("normalization", "none")),
+        normalization=normalization,
+        normalization_state=normalization_state,
+        time_window_start=int(cfg.get("time_window_start", 0)),
+        time_window_end=cfg.get("time_window_end"),
     )
     val_dataset = EEGClassificationDataset(
         val_df,
-        normalization=str(cfg.get("normalization", "none")),
+        normalization=normalization,
+        normalization_state=normalization_state,
+        time_window_start=int(cfg.get("time_window_start", 0)),
+        time_window_end=cfg.get("time_window_end"),
     )
 
     train_loader = DataLoader(
@@ -200,7 +252,7 @@ def main() -> None:
         model_name=str(cfg["model_name"]),
         num_classes=int(cfg["num_classes"]),
         num_channels=int(cfg.get("num_channels", 122)),
-        num_timesteps=int(cfg.get("num_timesteps", 500)),
+        num_timesteps=resolved_num_timesteps,
         num_subjects=int(cfg.get("num_subjects", 13)),
         cnn_out_channels=int(cfg.get("cnn_out_channels", 64)),
         d_model=int(cfg.get("d_model", 128)),
@@ -214,9 +266,21 @@ def main() -> None:
         temporal_filters=int(cfg.get("temporal_filters", 16)),
         depth_multiplier=int(cfg.get("depth_multiplier", 2)),
         separable_filters=int(cfg.get("separable_filters", 32)),
+        branch_kernel_sizes=cfg.get("branch_kernel_sizes", [15, 31, 63]),
+        num_refinement_blocks=int(cfg.get("num_refinement_blocks", 2)),
+        refinement_kernel_size=int(cfg.get("refinement_kernel_size", 15)),
+        stem_pool_kernel=int(cfg.get("stem_pool_kernel", 4)),
+        embedding_dim=int(cfg.get("embedding_dim", 256)),
+        projection_dim=cfg.get("projection_dim"),
+        projection_hidden_dim=cfg.get("projection_hidden_dim"),
+        projection_dropout=float(cfg.get("projection_dropout", 0.0)),
+        normalize_projected_embedding=bool(cfg.get("normalize_projected_embedding", False)),
+        subject_embedding_dim=int(cfg.get("subject_embedding_dim", 32)),
+        classifier_hidden_dim=int(cfg.get("classifier_hidden_dim", 128)),
+        fuse_mode=str(cfg.get("fuse_mode", "concat")),
     ).to(device)
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=float(cfg.get("label_smoothing", 0.0)))
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=float(cfg["lr"]),
@@ -228,6 +292,7 @@ def main() -> None:
     history: List[Dict[str, float]] = []
 
     epochs = int(cfg["epochs"])
+    scheduler = build_scheduler(optimizer, cfg, epochs)
     for epoch in range(1, epochs + 1):
         train_loss, train_acc = train_one_epoch(
             model,
@@ -278,6 +343,9 @@ def main() -> None:
                 config=cfg,
             )
 
+        if scheduler is not None:
+            scheduler.step()
+
     # Save last checkpoint too.
     save_checkpoint(
         checkpoint_path=checkpoints_dir / "last_model.pt",
@@ -302,6 +370,9 @@ def main() -> None:
         "best_epoch": int(best_epoch),
         "epochs": int(epochs),
         "device": str(device),
+        "resolved_num_timesteps": int(resolved_num_timesteps),
+        "label_smoothing": float(cfg.get("label_smoothing", 0.0)),
+        "scheduler": str(cfg.get("scheduler", "none")),
         "checkpoint_dir": str(checkpoints_dir),
         "num_train_samples": int(len(train_dataset)),
         "num_val_samples": int(len(val_dataset)),

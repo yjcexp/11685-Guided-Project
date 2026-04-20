@@ -23,17 +23,9 @@ num_workers: 4
 lr: 0.001
 weight_decay: 0.0001
 epochs: 30
-normalization: zscore_per_trial
-# Supported alternatives:
-# - zscore_per_channel_trainset
-# - zscore_per_subject_per_channel
-# - demean_only
-# - none
-# time_window_start: 0
-# time_window_end: 500
+normalization: zscore_per_channel_trainset
 label_smoothing: 0.0
 scheduler: none
-# scheduler_eta_min: 0.0
 seed: 42
 device: cuda
 

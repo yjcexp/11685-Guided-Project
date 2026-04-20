@@ -20,7 +20,7 @@ conda activate /ocean/projects/cis260094p/jye10/shared-envs/IDLS26
 export PYTHONNOUSERSITE=1
 
 python -m scripts.train_classification \
-  --config configs/classification_subject_aware_cnn_transformer.yaml
+  --config configs/classification_subject_embedding_cnn_transformer.yaml
 
 python -m scripts.build_metadata \
   --dataset_root /ocean/projects/cis250019p/gandotra/11785-gp-eeg \

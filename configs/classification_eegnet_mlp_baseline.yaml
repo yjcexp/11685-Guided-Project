@@ -4,7 +4,7 @@ train_split_csv: data/splits/train.csv
 val_split_csv: data/splits/val.csv
 test_split_csv: data/splits/test.csv
 
-model_name: eegnet_baseline
+model_name: eegnet_mlp_baseline
 num_classes: 20
 num_channels: 122
 num_timesteps: 500
@@ -12,28 +12,17 @@ dropout: 0.25
 temporal_filters: 16
 depth_multiplier: 2
 separable_filters: 32
-embedding_dim: 256
-projection_dim: 256
-projection_hidden_dim: 256
-projection_dropout: 0.1
-normalize_projected_embedding: true
+classifier_hidden_dim: 256
 
 batch_size: 64
 num_workers: 4
-lr: 0.001
+lr: 0.0005
 weight_decay: 0.0001
 epochs: 30
 normalization: zscore_per_trial
-# Supported alternatives:
-# - zscore_per_channel_trainset
-# - zscore_per_subject_per_channel
-# - demean_only
-# - none
-# time_window_start: 0
-# time_window_end: 500
-label_smoothing: 0.0
-scheduler: none
-# scheduler_eta_min: 0.0
+label_smoothing: 0.05
+scheduler: cosine
+scheduler_eta_min: 1.0e-5
 seed: 42
 device: cuda
 

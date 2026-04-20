@@ -24,6 +24,12 @@ SUBJECT_AWARE_MODEL_NAMES = {
     "subject_embedding_cnn_transformer",
     "cnn_transformer_subject_embedding",
     "subject_conditioned_cnn_transformer",
+    "eegnet_subject_embedding",
+    "subject_embedding_eegnet",
+    "subject_conditioned_eegnet",
+    "subject_conditioned_multiscale_eegnet",
+    "multiscale_eegnet_subject_conditioned",
+    "subject_conditioned_multiscale_eegnet_classifier",
 }
 
 
