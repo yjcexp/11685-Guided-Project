@@ -10,6 +10,18 @@ module load anaconda3
 conda deactivate || true
 conda activate /ocean/projects/cis250019p/mzhang23/TA/envs/IDLS26 && export PYTHONNOUSERSITE=1
 
+
+interact -p GPU-shared --gres=gpu:v100-32:1 -t 4:00:00 -A cis260094p
+
+module purge
+module load anaconda3
+conda deactivate || true
+conda activate /ocean/projects/cis260094p/jye10/shared-envs/IDLS26
+export PYTHONNOUSERSITE=1
+
+python -m scripts.train_classification \
+  --config configs/classification_subject_aware_cnn_transformer.yaml
+
 python -m scripts.build_metadata \
   --dataset_root /ocean/projects/cis250019p/gandotra/11785-gp-eeg \
   --output_csv data/processed/metadata.csv \
@@ -21,8 +33,13 @@ python -m scripts.make_splits \
   --seed 42
 
 python -m scripts.train_classification \
-  --config configs/classification_baseline.yaml
+  --config configs/classification_subject_aware_cnn_transformer.yaml
 
 python -m scripts.eval_classification \
   --config configs/classification_baseline.yaml
 
+TRAIN_JOB_ID=$(sbatch --parsable slurm/run_train.slurm configs/classification_subject_aware_cnn_transformer.yaml)
+sbatch --dependency=afterok:${TRAIN_JOB_ID} slurm/run_eval.slurm configs/classification_subject_aware_cnn_transformer.yaml
+
+squeue -j 40111051,40111052
+squeue -u $USER

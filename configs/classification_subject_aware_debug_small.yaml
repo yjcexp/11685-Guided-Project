@@ -1,0 +1,37 @@
+dataset_root: /ocean/projects/cis250019p/gandotra/11785-gp-eeg
+metadata_csv: data/processed/metadata.csv
+train_split_csv: data/splits/train.csv
+val_split_csv: data/splits/val.csv
+test_split_csv: data/splits/test.csv
+
+model_name: subject_aware_cnn_transformer
+num_classes: 20
+num_channels: 122
+num_timesteps: 500
+num_subjects: 13
+cnn_out_channels: 64
+d_model: 64
+nhead: 4
+num_transformer_layers: 1
+dim_feedforward: 128
+dropout: 0.1
+head_hidden_dim: 128
+head_dropout: 0.1
+
+batch_size: 64
+num_workers: 4
+lr: 0.0005
+weight_decay: 0.0001
+epochs: 30
+normalization: zscore_per_trial
+seed: 42
+device: cuda
+
+output_dir: outputs
+
+wandb:
+  enabled: true
+  entity: yejc20
+  project: eeg-task1
+  run_name: null
+  mode: online

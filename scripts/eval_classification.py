@@ -18,7 +18,7 @@ from src.data_utils import ensure_dir
 from src.datasets import EEGClassificationDataset
 from src.metrics import compute_confusion_matrix, compute_per_subject_accuracy
 from src.models import build_model
-from src.train_utils import evaluate
+from src.train_utils import build_subject_id_mapping, evaluate, model_requires_subject_ids
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,6 +55,26 @@ def resolve_device(device_name: str) -> torch.device:
     return torch.device(device_name)
 
 
+def resolve_checkpoint_path(output_dir: Path, model_name: str, checkpoint_path: Path | None) -> Path:
+    if checkpoint_path is not None:
+        return checkpoint_path
+
+    checkpoints_root = output_dir / "checkpoints"
+    direct_path = checkpoints_root / "best_model.pt"
+    if direct_path.exists():
+        return direct_path
+
+    pattern = f"{model_name}-*"
+    candidate_dirs = [path for path in checkpoints_root.glob(pattern) if path.is_dir()]
+    candidate_dirs = sorted(candidate_dirs, key=lambda path: path.name, reverse=True)
+    for candidate_dir in candidate_dirs:
+        candidate_checkpoint = candidate_dir / "best_model.pt"
+        if candidate_checkpoint.exists():
+            return candidate_checkpoint
+
+    return direct_path
+
+
 def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
@@ -62,7 +82,9 @@ def main() -> None:
     device = resolve_device(str(cfg["device"]))
     output_dir = Path(cfg["output_dir"])
 
-    checkpoint_path = args.checkpoint or (output_dir / "checkpoints" / "best_model.pt")
+    model_name = str(cfg["model_name"])
+    requires_subject_ids = model_requires_subject_ids(model_name)
+    checkpoint_path = resolve_checkpoint_path(output_dir, model_name, args.checkpoint)
     split_csv = args.split_csv or Path(cfg["test_split_csv"])
 
     test_df = pd.read_csv(split_csv)
@@ -78,11 +100,24 @@ def main() -> None:
         pin_memory=(device.type == "cuda"),
     )
 
+    subject_id_to_index = None
+    if requires_subject_ids:
+        train_df = pd.read_csv(cfg["train_split_csv"])
+        subject_id_to_index = build_subject_id_mapping(train_df["subject_id"].astype(str).tolist())
+
     model = build_model(
-        model_name=str(cfg["model_name"]),
+        model_name=model_name,
         num_classes=int(cfg["num_classes"]),
         num_channels=int(cfg.get("num_channels", 122)),
         num_timesteps=int(cfg.get("num_timesteps", 500)),
+        num_subjects=len(subject_id_to_index) if subject_id_to_index is not None else int(cfg.get("num_subjects", 13)),
+        cnn_out_channels=int(cfg.get("cnn_out_channels", 64)),
+        d_model=int(cfg.get("d_model", 128)),
+        nhead=int(cfg.get("nhead", 8)),
+        num_transformer_layers=int(cfg.get("num_transformer_layers", 2)),
+        dim_feedforward=int(cfg.get("dim_feedforward", 256)),
+        head_hidden_dim=cfg.get("head_hidden_dim"),
+        head_dropout=float(cfg.get("head_dropout", 0.1)),
         hidden_dims=cfg.get("hidden_dims", [512, 256]),
         dropout=float(cfg.get("dropout", 0.3)),
         temporal_filters=int(cfg.get("temporal_filters", 16)),
@@ -94,6 +129,12 @@ def main() -> None:
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint_cfg = checkpoint.get("config", {})
+    if requires_subject_ids and isinstance(checkpoint_cfg, dict) and "subject_id_to_index" in checkpoint_cfg:
+        subject_id_to_index = {
+            str(subject_id): int(subject_index)
+            for subject_id, subject_index in checkpoint_cfg["subject_id_to_index"].items()
+        }
     model.load_state_dict(checkpoint["model_state_dict"])
 
     criterion = nn.CrossEntropyLoss()
@@ -103,6 +144,8 @@ def main() -> None:
         criterion,
         device,
         collect_metadata=True,
+        subject_id_to_index=subject_id_to_index,
+        requires_subject_ids=requires_subject_ids,
     )
 
     num_classes = int(cfg["num_classes"])
@@ -134,6 +177,8 @@ def main() -> None:
         "split_csv": str(split_csv),
         "per_subject_accuracy": {k: float(v) for k, v in per_subject.items()},
     }
+    if subject_id_to_index is not None:
+        metrics_payload["subject_id_to_index"] = subject_id_to_index
     with (logs_dir / "test_metrics.json").open("w", encoding="utf-8") as handle:
         json.dump(metrics_payload, handle, indent=2)
 

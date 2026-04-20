@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import random
+import re
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Mapping, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -13,6 +15,16 @@ import torch.nn as nn
 from tqdm import tqdm
 
 from src.data_utils import ensure_dir
+
+
+SUBJECT_AWARE_MODEL_NAMES = {
+    "subject_aware_cnn_transformer",
+    "cnn_transformer_subject_head",
+    "multihead_cnn_transformer",
+    "subject_embedding_cnn_transformer",
+    "cnn_transformer_subject_embedding",
+    "subject_conditioned_cnn_transformer",
+}
 
 
 @torch.no_grad()
@@ -29,12 +41,89 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _subject_sort_key(subject_id: object) -> Tuple[int, str]:
+    text = str(subject_id).strip()
+    match = re.fullmatch(r"sub-(\d+)", text)
+    if match is not None:
+        return int(match.group(1)), text
+    if text.isdigit():
+        return int(text), text
+    return 10**9, text
+
+
+def build_subject_id_mapping(subject_ids: Sequence[object]) -> Dict[str, int]:
+    """Build a stable zero-based subject mapping from the actual dataset ids."""
+    unique_subject_ids = sorted({str(subject_id).strip() for subject_id in subject_ids}, key=_subject_sort_key)
+    return {subject_id: idx for idx, subject_id in enumerate(unique_subject_ids)}
+
+
+def model_requires_subject_ids(model_name: str) -> bool:
+    """Return whether a model is expected to consume subject_ids."""
+    return model_name in SUBJECT_AWARE_MODEL_NAMES
+
+
+def encode_subject_ids(
+    subject_ids: Sequence[object],
+    device: torch.device,
+    subject_id_to_index: Mapping[str, int] | None = None,
+) -> torch.Tensor:
+    """Convert raw subject identifiers into zero-based integer subject indices."""
+    encoded: List[int] = []
+    for subject_id in subject_ids:
+        if isinstance(subject_id, torch.Tensor):
+            value = int(subject_id.item())
+        else:
+            text = str(subject_id).strip()
+            if subject_id_to_index is not None:
+                if text not in subject_id_to_index:
+                    known_subjects = sorted(subject_id_to_index.keys(), key=_subject_sort_key)
+                    raise ValueError(
+                        f"Unknown subject_id={text!r}. Known subjects from training data: {known_subjects}"
+                    )
+                value = int(subject_id_to_index[text])
+            elif text.isdigit():
+                value = int(text)
+            else:
+                raise ValueError(
+                    f"Unable to encode subject_id={subject_id!r}. "
+                    "Expected a subject_id_to_index mapping or integer-like subject ids."
+                )
+        encoded.append(value)
+    return torch.tensor(encoded, dtype=torch.long, device=device)
+
+
+def forward_model(
+    model: nn.Module,
+    eeg: torch.Tensor,
+    subject_ids: Sequence[object] | None = None,
+    subject_id_to_index: Mapping[str, int] | None = None,
+    requires_subject_ids: bool | None = None,
+) -> torch.Tensor:
+    """Call the model with or without subject_ids."""
+    if requires_subject_ids is None:
+        signature = inspect.signature(model.forward)
+        requires_subject_ids = "subject_ids" in signature.parameters
+
+    if requires_subject_ids:
+        if subject_ids is None:
+            raise ValueError("Model forward requires subject_ids, but no subject_ids were provided.")
+        encoded_subject_ids = encode_subject_ids(
+            subject_ids,
+            device=eeg.device,
+            subject_id_to_index=subject_id_to_index,
+        )
+        return model(eeg, encoded_subject_ids)
+    return model(eeg)
+
+
 def train_one_epoch(
     model: nn.Module,
     dataloader: torch.utils.data.DataLoader,
     criterion: nn.Module,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
+    subject_id_to_index: Mapping[str, int] | None = None,
+    requires_subject_ids: bool | None = None,
 ) -> Tuple[float, float]:
     """Train for one epoch and return (loss, accuracy)."""
     model.train()
@@ -42,12 +131,18 @@ def train_one_epoch(
     total_samples = 0
     total_correct = 0
 
-    for eeg, labels, _, _ in tqdm(dataloader, desc="train", leave=False):
+    for eeg, labels, subject_ids, _ in tqdm(dataloader, desc="train", leave=False):
         eeg = eeg.to(device)
         labels = labels.to(device)
 
         optimizer.zero_grad(set_to_none=True)
-        logits = model(eeg)
+        logits = forward_model(
+            model,
+            eeg,
+            subject_ids,
+            subject_id_to_index=subject_id_to_index,
+            requires_subject_ids=requires_subject_ids,
+        )
         loss = criterion(logits, labels)
         loss.backward()
         optimizer.step()
@@ -69,6 +164,8 @@ def evaluate(
     criterion: nn.Module,
     device: torch.device,
     collect_metadata: bool = False,
+    subject_id_to_index: Mapping[str, int] | None = None,
+    requires_subject_ids: bool | None = None,
 ) -> Tuple[float, float, np.ndarray, np.ndarray, List[str], List[Dict[str, object]]]:
     """Evaluate model and optionally return row-level metadata records."""
     model.eval()
@@ -86,7 +183,13 @@ def evaluate(
         eeg = eeg.to(device)
         labels = labels.to(device)
 
-        logits = model(eeg)
+        logits = forward_model(
+            model,
+            eeg,
+            subj_batch,
+            subject_id_to_index=subject_id_to_index,
+            requires_subject_ids=requires_subject_ids,
+        )
         loss = criterion(logits, labels)
 
         preds = torch.argmax(logits, dim=1)

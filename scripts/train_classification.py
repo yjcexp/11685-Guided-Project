@@ -18,7 +18,14 @@ from torch.utils.data import DataLoader
 from src.data_utils import ensure_dir
 from src.datasets import EEGClassificationDataset
 from src.models import build_model
-from src.train_utils import evaluate, save_checkpoint, set_seed, train_one_epoch
+from src.train_utils import (
+    build_subject_id_mapping,
+    evaluate,
+    model_requires_subject_ids,
+    save_checkpoint,
+    set_seed,
+    train_one_epoch,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -114,6 +121,21 @@ def save_training_plots(history_df: pd.DataFrame, figures_dir: Path) -> Dict[str
     return {"loss_curve": loss_path, "acc_curve": acc_path}
 
 
+def log_split_diagnostics(train_df: pd.DataFrame, val_df: pd.DataFrame) -> None:
+    print("[data] Train label distribution")
+    print(train_df["class_label"].value_counts().sort_index().to_string())
+    print("[data] Val label distribution")
+    print(val_df["class_label"].value_counts().sort_index().to_string())
+    print("[data] Train samples per subject")
+    print(train_df["subject_id"].value_counts().sort_index().to_string())
+    print("[data] Val samples per subject")
+    print(val_df["subject_id"].value_counts().sort_index().to_string())
+    print("[data] Train per-subject label diversity")
+    print(train_df.groupby("subject_id")["class_label"].nunique().sort_index().to_string())
+    print("[data] Val per-subject label diversity")
+    print(val_df.groupby("subject_id")["class_label"].nunique().sort_index().to_string())
+
+
 def main() -> None:
     args = parse_args()
     cfg = load_config(args.config)
@@ -133,6 +155,22 @@ def main() -> None:
 
     train_df = pd.read_csv(cfg["train_split_csv"])
     val_df = pd.read_csv(cfg["val_split_csv"])
+    log_split_diagnostics(train_df, val_df)
+
+    tiny_subset_size = cfg.get("tiny_subset_size")
+    if tiny_subset_size is not None:
+        tiny_subset_size = int(tiny_subset_size)
+        tiny_subset_seed = int(cfg.get("tiny_subset_seed", cfg["seed"]))
+        train_df = train_df.sample(n=tiny_subset_size, random_state=tiny_subset_seed).reset_index(drop=True)
+        print(f"[debug] Using tiny training subset: {tiny_subset_size} samples (seed={tiny_subset_seed})")
+
+    cfg = dict(cfg)
+    requires_subject_ids = model_requires_subject_ids(model_name)
+    subject_id_to_index = None
+    if requires_subject_ids:
+        subject_id_to_index = build_subject_id_mapping(train_df["subject_id"].astype(str).tolist())
+        cfg["subject_id_to_index"] = subject_id_to_index
+        cfg["num_subjects"] = len(subject_id_to_index)
 
     train_dataset = EEGClassificationDataset(
         train_df,
@@ -163,6 +201,14 @@ def main() -> None:
         num_classes=int(cfg["num_classes"]),
         num_channels=int(cfg.get("num_channels", 122)),
         num_timesteps=int(cfg.get("num_timesteps", 500)),
+        num_subjects=int(cfg.get("num_subjects", 13)),
+        cnn_out_channels=int(cfg.get("cnn_out_channels", 64)),
+        d_model=int(cfg.get("d_model", 128)),
+        nhead=int(cfg.get("nhead", 8)),
+        num_transformer_layers=int(cfg.get("num_transformer_layers", 2)),
+        dim_feedforward=int(cfg.get("dim_feedforward", 256)),
+        head_hidden_dim=cfg.get("head_hidden_dim"),
+        head_dropout=float(cfg.get("head_dropout", 0.1)),
         hidden_dims=cfg.get("hidden_dims", [512, 256]),
         dropout=float(cfg.get("dropout", 0.3)),
         temporal_filters=int(cfg.get("temporal_filters", 16)),
@@ -183,8 +229,23 @@ def main() -> None:
 
     epochs = int(cfg["epochs"])
     for epoch in range(1, epochs + 1):
-        train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
-        val_loss, val_acc, _, _, _, _ = evaluate(model, val_loader, criterion, device)
+        train_loss, train_acc = train_one_epoch(
+            model,
+            train_loader,
+            criterion,
+            optimizer,
+            device,
+            subject_id_to_index=subject_id_to_index,
+            requires_subject_ids=requires_subject_ids,
+        )
+        val_loss, val_acc, _, _, _, _ = evaluate(
+            model,
+            val_loader,
+            criterion,
+            device,
+            subject_id_to_index=subject_id_to_index,
+            requires_subject_ids=requires_subject_ids,
+        )
 
         epoch_log = {
             "epoch": epoch,
@@ -260,6 +321,13 @@ def main() -> None:
         with wandb_info_path.open("w", encoding="utf-8") as handle:
             json.dump({"run_name": wandb_run_name}, handle, indent=2)
 
+    subject_mapping_path = None
+    if subject_id_to_index is not None:
+        summary["subject_id_to_index"] = subject_id_to_index
+        subject_mapping_path = logs_dir / "subject_id_mapping.json"
+        with subject_mapping_path.open("w", encoding="utf-8") as handle:
+            json.dump(subject_id_to_index, handle, indent=2, sort_keys=True)
+
     if wandb_run is not None:
         try:
             import wandb  # type: ignore
@@ -284,6 +352,8 @@ def main() -> None:
     print(f"[train] Saved history CSV: {history_csv}")
     print(f"[train] Saved history JSON: {history_json}")
     print(f"[train] Saved training summary: {summary_json}")
+    if subject_mapping_path is not None:
+        print(f"[train] Saved subject mapping: {subject_mapping_path}")
     print(f"[train] Saved curves: {plot_paths['loss_curve']}, {plot_paths['acc_curve']}")
     if wandb_run_name is not None:
         print(f"[train] Wandb run name: {wandb_run_name}")
