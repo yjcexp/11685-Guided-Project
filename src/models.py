@@ -744,6 +744,158 @@ class EEGNetResidualEncoderClassifier(nn.Module):
         return self.classifier(self.encode(x))
 
 
+class EEGTextRetrievalModel(nn.Module):
+    """EEG-to-text retrieval model using a Task 1 EEG encoder plus CLIP text features."""
+
+    def __init__(
+        self,
+        eeg_model_name: str,
+        eeg_model_kwargs: dict[str, Any],
+        clip_model_name: str = "openai/clip-vit-base-patch32",
+        clip_train_mode: str = "frozen",
+        partial_unfreeze_last_n_layers: int = 2,
+        use_text_projection: bool = True,
+        lora_r: int = 8,
+        lora_alpha: int = 16,
+        lora_dropout: float = 0.1,
+    ) -> None:
+        super().__init__()
+        self.eeg_model = build_model(model_name=eeg_model_name, **eeg_model_kwargs)
+        self.clip_model_name = clip_model_name
+        self.clip_train_mode = clip_train_mode
+        self.partial_unfreeze_last_n_layers = partial_unfreeze_last_n_layers
+        self.use_text_projection = use_text_projection
+        self.lora_r = lora_r
+        self.lora_alpha = lora_alpha
+        self.lora_dropout = lora_dropout
+
+        try:
+            from transformers import AutoTokenizer, CLIPModel  # type: ignore
+        except ImportError as exc:
+            raise ImportError(
+                "Task 2B retrieval requires `transformers`. Install it with `pip install transformers`."
+            ) from exc
+
+        self.tokenizer = AutoTokenizer.from_pretrained(clip_model_name)
+        self.clip_model = CLIPModel.from_pretrained(
+            clip_model_name,
+            use_safetensors=True,
+        )
+        self.clip_model.vision_model.requires_grad_(False)
+        self._configure_clip_trainability()
+
+        eeg_embedding_dim = getattr(self.eeg_model, "embedding_dim", None)
+        if eeg_embedding_dim is None and hasattr(self.eeg_model, "encoder"):
+            eeg_embedding_dim = getattr(self.eeg_model.encoder, "embedding_dim", None)
+        if eeg_embedding_dim is None:
+            raise ValueError(
+                f"EEG model {type(self.eeg_model).__name__} does not expose embedding_dim. "
+                "Use an encoder-based Task 1 model such as eegnet_embedding_classifier or eegnet_residual_encoder."
+            )
+
+        text_projection = self.clip_model.text_projection
+        if hasattr(text_projection, "shape"):
+            clip_projection_dim = int(text_projection.shape[1])
+        elif hasattr(text_projection, "out_features"):
+            clip_projection_dim = int(text_projection.out_features)
+        else:
+            raise ValueError(
+                "Unable to determine CLIP text projection dimension from "
+                f"{type(text_projection).__name__}."
+            )
+        self.eeg_projection = nn.Sequential(
+            nn.Linear(int(eeg_embedding_dim), clip_projection_dim),
+            nn.LayerNorm(clip_projection_dim),
+        )
+
+    def _freeze_all_clip(self) -> None:
+        for param in self.clip_model.parameters():
+            param.requires_grad = False
+
+    def _configure_clip_trainability(self) -> None:
+        mode = str(self.clip_train_mode).strip().lower()
+        self._freeze_all_clip()
+        if mode == "frozen":
+            return
+        if mode == "partial":
+            text_layers = self.clip_model.text_model.encoder.layers
+            n = min(max(int(self.partial_unfreeze_last_n_layers), 0), len(text_layers))
+            for layer in text_layers[-n:]:
+                for param in layer.parameters():
+                    param.requires_grad = True
+            if self.use_text_projection:
+                self.clip_model.text_projection.requires_grad_(True)
+            return
+        if mode == "lora":
+            try:
+                from peft import LoraConfig, get_peft_model  # type: ignore
+            except ImportError as exc:
+                raise ImportError("LoRA mode requires `peft`. Install it with `pip install peft`.") from exc
+            config = LoraConfig(
+                r=self.lora_r,
+                lora_alpha=self.lora_alpha,
+                lora_dropout=self.lora_dropout,
+                target_modules=["q_proj", "v_proj"],
+                bias="none",
+            )
+            self.clip_model.text_model = get_peft_model(self.clip_model.text_model, config)
+            return
+        raise ValueError(f"Unsupported clip_train_mode={self.clip_train_mode!r}. Expected frozen, partial, or lora.")
+
+    def load_eeg_checkpoint(self, checkpoint_path: str | None) -> dict[str, int]:
+        """Load Task 1 checkpoint into the EEG encoder with shape-matched keys only."""
+        if checkpoint_path is None:
+            return {"loaded_keys": 0, "total_checkpoint_keys": 0}
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        state_dict = checkpoint.get("model_state_dict", checkpoint)
+        current_state = self.eeg_model.state_dict()
+        filtered = {
+            key: value
+            for key, value in state_dict.items()
+            if key in current_state and current_state[key].shape == value.shape
+        }
+        self.eeg_model.load_state_dict(filtered, strict=False)
+        return {
+            "loaded_keys": int(len(filtered)),
+            "total_checkpoint_keys": int(len(state_dict)),
+        }
+
+    def encode_eeg(self, eeg: torch.Tensor) -> torch.Tensor:
+        if hasattr(self.eeg_model, "encode"):
+            eeg_embedding = self.eeg_model.encode(eeg)
+        elif hasattr(self.eeg_model, "encoder") and hasattr(self.eeg_model.encoder, "encode"):
+            eeg_embedding = self.eeg_model.encoder.encode(eeg)
+        else:
+            raise ValueError(
+                f"EEG model {type(self.eeg_model).__name__} does not provide encode(). "
+                "Use an encoder-based Task 1 model for retrieval."
+            )
+        eeg_embedding = self.eeg_projection(eeg_embedding)
+        return torch.nn.functional.normalize(eeg_embedding, dim=-1)
+
+    def encode_text(self, captions: list[str], device: torch.device) -> torch.Tensor:
+        tokenized = self.tokenizer(
+            captions,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+        )
+        tokenized = {key: value.to(device) for key, value in tokenized.items()}
+        text_embedding = self.clip_model.get_text_features(**tokenized)
+        if not isinstance(text_embedding, torch.Tensor):
+            text_outputs = self.clip_model.text_model(**tokenized)
+            pooled_output = text_outputs.pooler_output
+            text_projection = self.clip_model.text_projection
+            if isinstance(text_projection, nn.Linear):
+                text_embedding = text_projection(pooled_output)
+            else:
+                text_embedding = pooled_output @ text_projection
+        return torch.nn.functional.normalize(text_embedding, dim=-1)
+
+    def forward(self, eeg: torch.Tensor, captions: list[str], device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.encode_eeg(eeg), self.encode_text(captions, device=device)
+
+
 class EEGNetBaseline(nn.Module):
     """Compact EEGNet-style model.
 

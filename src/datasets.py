@@ -277,3 +277,39 @@ class EEGClassificationDataset(Dataset):
     @property
     def dataframe(self) -> pd.DataFrame:
         return self.df
+
+
+class EEGRetrievalDataset(EEGClassificationDataset):
+    """Trial-level EEG dataset for EEG-to-caption retrieval."""
+
+    def __init__(
+        self,
+        data: str | Path | pd.DataFrame,
+        normalization: str = "none",
+        normalization_state: Dict[str, Any] | None = None,
+        cache_size: int = 32,
+        time_window_start: int = 0,
+        time_window_end: int | None = None,
+        caption_column: str = "caption",
+    ) -> None:
+        super().__init__(
+            data=data,
+            normalization=normalization,
+            normalization_state=normalization_state,
+            cache_size=cache_size,
+            time_window_start=time_window_start,
+            time_window_end=time_window_end,
+        )
+        if caption_column not in self.df.columns:
+            raise ValueError(f"Retrieval dataset requires caption column {caption_column!r}.")
+        self.caption_column = caption_column
+
+    def __getitem__(self, index: int) -> Tuple[torch.FloatTensor, str, str, Dict[str, object]]:
+        eeg, _, subject_id, metadata = super().__getitem__(index)
+        caption = self.df.iloc[index][self.caption_column]
+        if pd.isna(caption) or str(caption).strip() == "":
+            raise ValueError(f"Missing caption at dataset row {index}.")
+        metadata = dict(metadata)
+        metadata["caption"] = str(caption)
+        metadata["class_label"] = int(self.df.iloc[index]["class_label"])
+        return eeg, str(caption), subject_id, metadata

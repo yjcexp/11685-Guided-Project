@@ -50,3 +50,16 @@ sbatch --dependency=afterok:${TRAIN_JOB_ID} slurm/run_eval.slurm configs/classif
 
 squeue -j 40111051,40111052
 squeue -u $USER
+
+
+
+python -m scripts.train_retrieval --config configs/retrieval_task2b_frozen.yaml
+python -m scripts.eval_retrieval --config configs/retrieval_task2b_frozen.yaml
+
+
+python -m scripts.train_retrieval --config configs/retrieval_task2b_partial.yaml
+python -m scripts.eval_retrieval --config configs/retrieval_task2b_partial.yaml
+
+
+python -m scripts.train_retrieval --config configs/retrieval_task2b_lora.yaml
+python -m scripts.eval_retrieval --config configs/retrieval_task2b_lora.yaml

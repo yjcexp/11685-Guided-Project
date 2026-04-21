@@ -1,0 +1,58 @@
+model_name: task2b_retrieval_partial
+
+train_split_csv: data/splits/train.csv
+val_split_csv: data/splits/val.csv
+test_split_csv: data/splits/test.csv
+
+eeg_model_name: eegnet_residual_encoder
+task1_checkpoint: outputs/checkpoints/eegnet_residual_encoder-20260420_215546/best_model.pt
+num_classes: 20
+num_channels: 122
+num_timesteps: 500
+time_window_start: 100
+time_window_end: 300
+normalization: demean_only
+
+temporal_filters: 24
+temporal_kernel_size: 32
+depth_multiplier: 2
+separable_filters: 64
+separable_kernel_size: 8
+pool1_kernel_size: 2
+pool2_kernel_size: 4
+num_refinement_blocks: 1
+refinement_kernel_size: 7
+use_gated_pooling: true
+dropout: 0.15
+embedding_dim: 256
+projection_dim: 256
+projection_hidden_dim: 256
+projection_dropout: 0.1
+normalize_projected_embedding: true
+
+clip_model_name: openai/clip-vit-base-patch32
+clip_train_mode: partial
+partial_unfreeze_last_n_layers: 2
+use_text_projection: true
+lora_r: 8
+lora_alpha: 16
+lora_dropout: 0.1
+
+batch_size: 64
+num_workers: 4
+lr: 5.0e-5
+weight_decay: 1.0e-4
+epochs: 10
+temperature: 0.07
+seed: 42
+device: cuda
+output_dir: outputs
+scheduler: cosine
+scheduler_eta_min: 1.0e-6
+
+wandb:
+  enabled: true
+  entity: 11685-Proj
+  project: eeg-task2b
+  run_name: partial
+  mode: online
