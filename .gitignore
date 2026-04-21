@@ -48,3 +48,4 @@ wandb/
 *.pt
 *.pth
 *.ckpt
+*.txt

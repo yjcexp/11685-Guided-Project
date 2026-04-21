@@ -122,6 +122,32 @@ def forward_model(
     return model(eeg)
 
 
+def call_model_method(
+    model: nn.Module,
+    method_name: str,
+    eeg: torch.Tensor,
+    subject_ids: Sequence[object] | None = None,
+    subject_id_to_index: Mapping[str, int] | None = None,
+) -> torch.Tensor:
+    """Call a named model method with optional subject ids."""
+    method = getattr(model, method_name, None)
+    if method is None:
+        raise AttributeError(f"Model of type {type(model).__name__} does not define `{method_name}()`.")
+
+    signature = inspect.signature(method)
+    requires_subject_ids = "subject_ids" in signature.parameters
+    if requires_subject_ids:
+        if subject_ids is None:
+            raise ValueError(f"Model method `{method_name}` requires subject_ids, but none were provided.")
+        encoded_subject_ids = encode_subject_ids(
+            subject_ids,
+            device=eeg.device,
+            subject_id_to_index=subject_id_to_index,
+        )
+        return method(eeg, encoded_subject_ids)
+    return method(eeg)
+
+
 def train_one_epoch(
     model: nn.Module,
     dataloader: torch.utils.data.DataLoader,
