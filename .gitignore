@@ -49,3 +49,4 @@ wandb/
 *.pth
 *.ckpt
 *.txt
+*.npy
