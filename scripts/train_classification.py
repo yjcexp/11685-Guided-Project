@@ -282,6 +282,7 @@ def main() -> None:
         normalize_projected_embedding=bool(cfg.get("normalize_projected_embedding", False)),
         subject_embedding_dim=int(cfg.get("subject_embedding_dim", 32)),
         classifier_hidden_dim=int(cfg.get("classifier_hidden_dim", 128)),
+        classifier_head_dropout=float(cfg.get("classifier_head_dropout", 0.2)),
         fuse_mode=str(cfg.get("fuse_mode", "concat")),
     ).to(device)
 

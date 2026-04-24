@@ -1,0 +1,15 @@
+{
+  "best_val_acc": 0.05153846153846154,
+  "best_epoch": 22,
+  "epochs": 30,
+  "device": "cuda",
+  "checkpoint_dir": "outputs/checkpoints/eegnet_subject_embedding-20260420_145859",
+  "num_train_samples": 256,
+  "num_val_samples": 5200,
+  "best_checkpoint": "outputs/checkpoints/eegnet_subject_embedding-20260420_145859/best_model.pt",
+  "last_checkpoint": "outputs/checkpoints/eegnet_subject_embedding-20260420_145859/last_model.pt",
+  "history_csv": "outputs/logs/eegnet_subject_embedding-20260420_145859/train_history.csv",
+  "history_json": "outputs/logs/eegnet_subject_embedding-20260420_145859/train_history.json",
+  "loss_curve": "outputs/figures/eegnet_subject_embedding-20260420_145859/train_val_loss.png",
+  "acc_curve": "outputs/figures/eegnet_subject_embedding-20260420_145859/train_val_accuracy.png"
+}

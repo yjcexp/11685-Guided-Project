@@ -1,0 +1,15 @@
+{
+  "best_val_acc": 0.06057692307692308,
+  "best_epoch": 19,
+  "epochs": 30,
+  "device": "cuda",
+  "checkpoint_dir": "outputs/checkpoints/shared_head_cnn_transformer-20260420_124713",
+  "num_train_samples": 15600,
+  "num_val_samples": 5200,
+  "best_checkpoint": "outputs/checkpoints/shared_head_cnn_transformer-20260420_124713/best_model.pt",
+  "last_checkpoint": "outputs/checkpoints/shared_head_cnn_transformer-20260420_124713/last_model.pt",
+  "history_csv": "outputs/logs/shared_head_cnn_transformer-20260420_124713/train_history.csv",
+  "history_json": "outputs/logs/shared_head_cnn_transformer-20260420_124713/train_history.json",
+  "loss_curve": "outputs/figures/shared_head_cnn_transformer-20260420_124713/train_val_loss.png",
+  "acc_curve": "outputs/figures/shared_head_cnn_transformer-20260420_124713/train_val_accuracy.png"
+}

@@ -1,0 +1,73 @@
+{
+  "best_val_loss": 4.1179779463547925,
+  "best_epoch": 2,
+  "checkpoint_dir": "outputs/checkpoints/task2b_retrieval_frozen-20260421_014359",
+  "wandb_run_name": "eeg_frozen",
+  "loaded_keys": 45,
+  "total_checkpoint_keys": 45,
+  "trainable_params": 306245,
+  "total_params": 151583558,
+  "trainable_fraction": 0.0020203048671017473,
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 4.096071899120624,
+      "val_loss": 4.11940220099229,
+      "lr": 9.757729755661011e-05
+    },
+    {
+      "epoch": 2,
+      "train_loss": 3.989747419112768,
+      "val_loss": 4.1179779463547925,
+      "lr": 9.05463412215599e-05
+    },
+    {
+      "epoch": 3,
+      "train_loss": 3.9468632355714455,
+      "val_loss": 4.118386385991023,
+      "lr": 7.959536998847742e-05
+    },
+    {
+      "epoch": 4,
+      "train_loss": 3.9282169743073294,
+      "val_loss": 4.119268217820387,
+      "lr": 6.57963412215599e-05
+    },
+    {
+      "epoch": 5,
+      "train_loss": 3.902572394150954,
+      "val_loss": 4.119867495023287,
+      "lr": 5.05e-05
+    },
+    {
+      "epoch": 6,
+      "train_loss": 3.886012310125889,
+      "val_loss": 4.128006238203782,
+      "lr": 3.5203658778440106e-05
+    },
+    {
+      "epoch": 7,
+      "train_loss": 3.877903309846536,
+      "val_loss": 4.1270184957064115,
+      "lr": 2.1404630011522586e-05
+    },
+    {
+      "epoch": 8,
+      "train_loss": 3.8658562210278635,
+      "val_loss": 4.124685878753662,
+      "lr": 1.0453658778440107e-05
+    },
+    {
+      "epoch": 9,
+      "train_loss": 3.8581066190279447,
+      "val_loss": 4.12937287403987,
+      "lr": 3.4227024433899e-06
+    },
+    {
+      "epoch": 10,
+      "train_loss": 3.8516466091840695,
+      "val_loss": 4.1279233242915225,
+      "lr": 1e-06
+    }
+  ]
+}

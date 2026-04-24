@@ -269,8 +269,15 @@ class EEGClassificationDataset(Dataset):
             "session_id": str(row["session_id"]),
             "run_id": str(row["run_id"]),
             "trial_index": trial_index,
-            "image_name": row.get("image_name", None),
         }
+        if "image_name" in self.df.columns and not pd.isna(row.get("image_name")):
+            metadata["image_name"] = str(row["image_name"])
+        if "class_name" in self.df.columns and not pd.isna(row.get("class_name")):
+            metadata["class_name"] = str(row["class_name"])
+        if "Id" in self.df.columns and not pd.isna(row.get("Id")):
+            metadata["Id"] = str(row["Id"])
+        elif "id" in self.df.columns and not pd.isna(row.get("id")):
+            metadata["Id"] = str(row["id"])
 
         return torch.from_numpy(np.ascontiguousarray(eeg, dtype=np.float32)), label, subject_id, metadata
 

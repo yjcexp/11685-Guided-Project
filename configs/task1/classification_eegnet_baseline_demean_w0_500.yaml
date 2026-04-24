@@ -25,7 +25,7 @@ num_workers: 4
 lr: 0.001
 weight_decay: 0.0001
 epochs: 30
-normalization: demean_only
+normalization: zscore_per_trial
 label_smoothing: 0.0
 scheduler: none
 seed: 42

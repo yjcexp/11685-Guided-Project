@@ -21,6 +21,9 @@ from src.models import build_model
 from src.train_utils import build_subject_id_mapping, evaluate, model_requires_subject_ids
 
 
+EXPECTED_SUBMISSION_ROWS = 26000
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate EEG Task 1 classification baseline.")
     parser.add_argument(
@@ -40,6 +43,17 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Override split CSV path. Defaults to test_split_csv from config.",
+    )
+    parser.add_argument(
+        "--submission_csv",
+        type=Path,
+        default=None,
+        help="Optional path to save Kaggle-style submission CSV.",
+    )
+    parser.add_argument(
+        "--include_category_name",
+        action="store_true",
+        help="Include a third CategoryName column in the submission CSV.",
     )
     return parser.parse_args()
 
@@ -80,6 +94,16 @@ def resolve_eval_run_name(checkpoint_path: Path, model_name: str) -> str:
     if checkpoint_parent.name.startswith(f"{model_name}-"):
         return checkpoint_parent.name
     return f"{model_name}-eval"
+
+
+def resolve_split_csv(args: argparse.Namespace, cfg: Dict[str, object]) -> Path:
+    if args.split_csv is not None:
+        return args.split_csv
+    if args.submission_csv is not None:
+        metadata_csv = Path(str(cfg.get("metadata_csv", "data/processed/metadata.csv")))
+        if metadata_csv.exists():
+            return metadata_csv
+    return Path(str(cfg["test_split_csv"]))
 
 
 def build_per_class_accuracy_df(y_true: np.ndarray, y_pred: np.ndarray, num_classes: int) -> pd.DataFrame:
@@ -131,6 +155,81 @@ def build_per_subject_metrics_df(pred_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def build_submission_dataframe(
+    pred_df: pd.DataFrame,
+    train_df: pd.DataFrame,
+    include_category_name: bool = False,
+) -> pd.DataFrame:
+    fallback_trial_ids = (
+        pred_df["subject_id"].astype(str)
+        + "_"
+        + pred_df["session_id"].astype(str)
+        + "_"
+        + pred_df["run_id"].astype(str)
+        + "_"
+        + pred_df["trial_index"].astype(int).astype(str)
+    )
+
+    if "Id" in pred_df.columns:
+        raw_ids = pred_df["Id"]
+    elif "id" in pred_df.columns:
+        raw_ids = pred_df["id"]
+    else:
+        raw_ids = None
+
+    if raw_ids is None:
+        trial_ids = fallback_trial_ids
+    else:
+        normalized_ids = raw_ids.astype("string").str.strip()
+        invalid_mask = normalized_ids.isna() | normalized_ids.isin({"", "None", "nan", "<NA>"})
+        trial_ids = normalized_ids.mask(invalid_mask, fallback_trial_ids).astype(str)
+
+    submission_df = pd.DataFrame(
+        {
+            "Id": trial_ids,
+            "Category": pred_df["pred_label"].astype(int),
+        }
+    )
+    if include_category_name:
+        label_to_name_map: dict[int, str] = {}
+        if {"class_label", "class_name"}.issubset(train_df.columns):
+            mapping_df = (
+                train_df[["class_label", "class_name"]]
+                .dropna()
+                .drop_duplicates()
+                .sort_values("class_label")
+            )
+            label_to_name_map = {
+                int(row["class_label"]): str(row["class_name"])
+                for _, row in mapping_df.iterrows()
+            }
+        submission_df["CategoryName"] = submission_df["Category"].map(label_to_name_map).fillna("")
+    return submission_df
+
+
+def validate_submission_dataframe(submission_df: pd.DataFrame) -> None:
+    required_columns = ["Id", "Category"]
+    if list(submission_df.columns[:2]) != required_columns:
+        raise ValueError(
+            f"Submission CSV must start with columns {required_columns}, got {list(submission_df.columns)}"
+        )
+    if len(submission_df) != EXPECTED_SUBMISSION_ROWS:
+        raise ValueError(
+            "Submission row count mismatch. "
+            f"Expected {EXPECTED_SUBMISSION_ROWS} rows, got {len(submission_df)}. "
+            "If no official separate Kaggle test file is provided, use the full metadata CSV."
+        )
+    if submission_df["Id"].isna().any() or (submission_df["Id"].astype(str).str.strip() == "").any():
+        raise ValueError("Submission contains empty Id values.")
+    if submission_df["Id"].nunique() != len(submission_df):
+        raise ValueError("Submission contains duplicated Id values.")
+    categories = submission_df["Category"].astype(int)
+    invalid_mask = (categories < 0) | (categories > 19)
+    if invalid_mask.any():
+        invalid_values = sorted(set(categories[invalid_mask].tolist()))
+        raise ValueError(f"Submission contains Category values outside [0, 19]: {invalid_values}")
+
+
 def resolve_num_timesteps(cfg: Dict[str, object]) -> int:
     total_timesteps = int(cfg.get("num_timesteps", 500))
     time_window_start = int(cfg.get("time_window_start", 0))
@@ -155,7 +254,7 @@ def main() -> None:
     resolved_num_timesteps = resolve_num_timesteps(cfg)
     requires_subject_ids = model_requires_subject_ids(model_name)
     checkpoint_path = resolve_checkpoint_path(output_dir, model_name, args.checkpoint)
-    split_csv = args.split_csv or Path(cfg["test_split_csv"])
+    split_csv = resolve_split_csv(args, cfg)
     split_name = Path(split_csv).stem
 
     train_df = pd.read_csv(cfg["train_split_csv"])
@@ -220,6 +319,7 @@ def main() -> None:
         normalize_projected_embedding=bool(cfg.get("normalize_projected_embedding", False)),
         subject_embedding_dim=int(cfg.get("subject_embedding_dim", 32)),
         classifier_hidden_dim=int(cfg.get("classifier_hidden_dim", 128)),
+        classifier_head_dropout=float(cfg.get("classifier_head_dropout", 0.2)),
         fuse_mode=str(cfg.get("fuse_mode", "concat")),
     ).to(device)
 
@@ -274,6 +374,15 @@ def main() -> None:
     pred_df["pred_label"] = y_pred
     predictions_path = predictions_dir / f"{split_name}_predictions.csv"
     pred_df.to_csv(predictions_path, index=False)
+    submission_path = args.submission_csv or (predictions_dir / f"{split_name}_submission.csv")
+    submission_df = build_submission_dataframe(
+        pred_df=pred_df,
+        train_df=train_df,
+        include_category_name=bool(args.include_category_name),
+    )
+    if args.submission_csv is not None:
+        validate_submission_dataframe(submission_df)
+    submission_df.to_csv(submission_path, index=False)
 
     per_class_accuracy_df = build_per_class_accuracy_df(y_true, y_pred, num_classes=num_classes)
     predicted_label_distribution_df = build_predicted_label_distribution_df(y_true, y_pred, num_classes=num_classes)
@@ -306,6 +415,7 @@ def main() -> None:
         json.dump(metrics_payload, handle, indent=2)
 
     print(f"[eval] Saved predictions: {predictions_path}")
+    print(f"[eval] Saved submission CSV: {submission_path}")
     print(f"[eval] Saved confusion matrix: {confusion_matrix_npy_path}")
     print(f"[eval] Saved metrics JSON: {metrics_json_path}")
     print(f"[eval] Saved per-class accuracy: {per_class_accuracy_path}")

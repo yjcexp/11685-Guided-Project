@@ -744,6 +744,78 @@ class EEGNetResidualEncoderClassifier(nn.Module):
         return self.classifier(self.encode(x))
 
 
+class EEGNetResidualEncoderMLPHeadClassifier(nn.Module):
+    """Residual EEGNet encoder with a stronger MLP classification head.
+
+    This keeps the encoder architecture unchanged and only replaces the final
+    classifier with a deeper head over the learned EEG embedding.
+    """
+
+    def __init__(
+        self,
+        num_classes: int,
+        num_channels: int = 122,
+        num_timesteps: int = 500,
+        temporal_filters: int = 24,
+        depth_multiplier: int = 2,
+        separable_filters: int = 64,
+        dropout: float = 0.15,
+        embedding_dim: int = 256,
+        temporal_kernel_size: int = 32,
+        separable_kernel_size: int = 8,
+        pool1_kernel_size: int = 2,
+        pool2_kernel_size: int = 4,
+        num_refinement_blocks: int = 1,
+        refinement_kernel_size: int = 7,
+        use_gated_pooling: bool = True,
+        projection_dim: int | None = None,
+        projection_hidden_dim: int | None = None,
+        projection_dropout: float = 0.0,
+        normalize_projected_embedding: bool = False,
+        classifier_hidden_dim: int = 256,
+        classifier_head_dropout: float = 0.2,
+    ) -> None:
+        super().__init__()
+        self.encoder = EEGNetResidualEmbeddingEncoder(
+            num_channels=num_channels,
+            num_timesteps=num_timesteps,
+            temporal_filters=temporal_filters,
+            depth_multiplier=depth_multiplier,
+            separable_filters=separable_filters,
+            dropout=dropout,
+            embedding_dim=embedding_dim,
+            temporal_kernel_size=temporal_kernel_size,
+            separable_kernel_size=separable_kernel_size,
+            pool1_kernel_size=pool1_kernel_size,
+            pool2_kernel_size=pool2_kernel_size,
+            num_refinement_blocks=num_refinement_blocks,
+            refinement_kernel_size=refinement_kernel_size,
+            use_gated_pooling=use_gated_pooling,
+            projection_dim=projection_dim,
+            projection_hidden_dim=projection_hidden_dim,
+            projection_dropout=projection_dropout,
+            normalize_projected_embedding=normalize_projected_embedding,
+        )
+        self.classifier = nn.Sequential(
+            nn.Linear(embedding_dim, classifier_hidden_dim),
+            nn.GELU(),
+            nn.Dropout(p=classifier_head_dropout),
+            nn.Linear(classifier_hidden_dim, num_classes),
+        )
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        return self.encoder.encode(x)
+
+    def project_embedding(self, embedding: torch.Tensor) -> torch.Tensor:
+        return self.encoder.project_embedding(embedding)
+
+    def encode_projected(self, x: torch.Tensor) -> torch.Tensor:
+        return self.encoder.encode_projected(x)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.classifier(self.encode(x))
+
+
 class EEGTextRetrievalModel(nn.Module):
     """EEG-to-text retrieval model using a Task 1 EEG encoder plus CLIP text features."""
 
@@ -1672,6 +1744,35 @@ def build_model(model_name: str, num_classes: int, **kwargs: Any) -> nn.Module:
             normalize_projected_embedding=bool(kwargs.get("normalize_projected_embedding", False)),
         )
 
+    if model_name in {
+        "eegnet_residual_encoder_mlp_head",
+        "eegnet_residual_mlp_head",
+        "eegnet_residual_strong_head",
+    }:
+        return EEGNetResidualEncoderMLPHeadClassifier(
+            num_classes=num_classes,
+            num_channels=int(kwargs.get("num_channels", 122)),
+            num_timesteps=int(kwargs.get("num_timesteps", 500)),
+            temporal_filters=int(kwargs.get("temporal_filters", 24)),
+            depth_multiplier=int(kwargs.get("depth_multiplier", 2)),
+            separable_filters=int(kwargs.get("separable_filters", 64)),
+            dropout=float(kwargs.get("dropout", 0.15)),
+            embedding_dim=int(kwargs.get("embedding_dim", 256)),
+            temporal_kernel_size=int(kwargs.get("temporal_kernel_size", 32)),
+            separable_kernel_size=int(kwargs.get("separable_kernel_size", 8)),
+            pool1_kernel_size=int(kwargs.get("pool1_kernel_size", 2)),
+            pool2_kernel_size=int(kwargs.get("pool2_kernel_size", 4)),
+            num_refinement_blocks=int(kwargs.get("num_refinement_blocks", 1)),
+            refinement_kernel_size=int(kwargs.get("refinement_kernel_size", 7)),
+            use_gated_pooling=bool(kwargs.get("use_gated_pooling", True)),
+            projection_dim=kwargs.get("projection_dim"),
+            projection_hidden_dim=kwargs.get("projection_hidden_dim"),
+            projection_dropout=float(kwargs.get("projection_dropout", 0.0)),
+            normalize_projected_embedding=bool(kwargs.get("normalize_projected_embedding", False)),
+            classifier_hidden_dim=int(kwargs.get("classifier_hidden_dim", 256)),
+            classifier_head_dropout=float(kwargs.get("classifier_head_dropout", 0.2)),
+        )
+
     if model_name in {"eegnet_mlp_baseline", "eegnet_mlp_head", "eegnet_mlp_classifier"}:
         return EEGNetMLPBaseline(
             num_classes=num_classes,
@@ -1762,6 +1863,7 @@ def build_model(model_name: str, num_classes: int, **kwargs: Any) -> nn.Module:
         "cnn_baseline, baseline_cnn, mlp_baseline, eegnet_baseline, "
         "eegnet_embedding_classifier, eegnet_embedding_baseline, eegnet_encoder_classifier, "
         "eegnet_residual_encoder, eegnet_residual_classifier, eegnet_refined_encoder, "
+        "eegnet_residual_encoder_mlp_head, eegnet_residual_mlp_head, eegnet_residual_strong_head, "
         "eegnet_subject_embedding, subject_embedding_eegnet, subject_conditioned_eegnet, "
         "eegnet_mlp_baseline, eegnet_mlp_head, eegnet_mlp_classifier, "
         "multiscale_eegnet_classifier, multiscale_eegnet, multiscale_eegnet_encoder_classifier, "

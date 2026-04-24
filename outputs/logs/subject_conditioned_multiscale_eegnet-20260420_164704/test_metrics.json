@@ -1,0 +1,37 @@
+{
+  "loss": 3.069428165142353,
+  "accuracy": 0.07173076923076924,
+  "num_samples": 5200,
+  "checkpoint": "outputs/checkpoints/subject_conditioned_multiscale_eegnet-20260420_164704/best_model.pt",
+  "split_csv": "data/splits/test.csv",
+  "per_subject_accuracy": {
+    "sub-02": 0.095,
+    "sub-03": 0.0675,
+    "sub-05": 0.07,
+    "sub-09": 0.0675,
+    "sub-14": 0.0575,
+    "sub-15": 0.08,
+    "sub-17": 0.0925,
+    "sub-19": 0.0625,
+    "sub-20": 0.0425,
+    "sub-23": 0.0775,
+    "sub-24": 0.0825,
+    "sub-28": 0.075,
+    "sub-29": 0.0625
+  },
+  "subject_id_to_index": {
+    "sub-02": 0,
+    "sub-03": 1,
+    "sub-05": 2,
+    "sub-09": 3,
+    "sub-14": 4,
+    "sub-15": 5,
+    "sub-17": 6,
+    "sub-19": 7,
+    "sub-20": 8,
+    "sub-23": 9,
+    "sub-24": 10,
+    "sub-28": 11,
+    "sub-29": 12
+  }
+}

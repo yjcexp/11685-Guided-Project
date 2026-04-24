@@ -1,0 +1,19 @@
+{
+  "checkpoint": "outputs/checkpoints/task2b_retrieval_lora-20260421_015423/best_model.pt",
+  "split_csv": "data/splits/test.csv",
+  "recall@1": 0.000576923076923077,
+  "recall@5": 0.0021153846153846153,
+  "recall@10": 0.003269230769230769,
+  "precision@1": 0.000576923076923077,
+  "precision@5": 0.00042307692307692304,
+  "precision@10": 0.000326923076923077,
+  "clipscore_matched_mean": 0.03663479909300804,
+  "clipscore_matched_std": 0.04651876911520958,
+  "clipscore_mismatched_mean": 0.02015947736799717,
+  "clipscore_mismatched_std": 0.04944383352994919,
+  "clipscore_retrieved_mean": 0.13279688358306885,
+  "clipscore_retrieved_std": 0.027860909700393677,
+  "trainable_params": 502853,
+  "total_params": 151780166,
+  "trainable_fraction": 0.003313034985084942
+}

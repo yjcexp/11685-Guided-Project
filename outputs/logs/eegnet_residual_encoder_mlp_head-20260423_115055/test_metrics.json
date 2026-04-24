@@ -1,0 +1,22 @@
+{
+  "loss": 2.963174214729896,
+  "accuracy": 0.09057692307692308,
+  "num_samples": 5200,
+  "checkpoint": "outputs/checkpoints/eegnet_residual_encoder_mlp_head-20260423_115055/best_model.pt",
+  "split_csv": "data/splits/test.csv",
+  "per_subject_accuracy": {
+    "sub-02": 0.095,
+    "sub-03": 0.0625,
+    "sub-05": 0.09,
+    "sub-09": 0.095,
+    "sub-14": 0.11,
+    "sub-15": 0.075,
+    "sub-17": 0.0925,
+    "sub-19": 0.105,
+    "sub-20": 0.0675,
+    "sub-23": 0.0725,
+    "sub-24": 0.1,
+    "sub-28": 0.105,
+    "sub-29": 0.1075
+  }
+}

@@ -1,0 +1,23 @@
+model:
+  name: retrieval_baseline
+  encoder_type: mlp
+  embedding_dim: 256
+  projection_dim: 128
+
+data:
+  metadata_path: data/processed/metadata.csv
+  split_dir: data/splits
+  batch_size: 32
+
+training:
+  num_epochs: 50
+  learning_rate: 0.001
+  weight_decay: 1e-4
+  temperature: 0.07
+  device: cuda
+  seed: 42
+
+output:
+  checkpoint_dir: outputs/checkpoints
+  log_dir: outputs/logs
+  save_every: 5

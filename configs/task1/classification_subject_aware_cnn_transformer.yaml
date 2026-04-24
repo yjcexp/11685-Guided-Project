@@ -14,7 +14,7 @@ d_model: 128
 nhead: 8
 num_transformer_layers: 2
 dim_feedforward: 256
-dropout: 0.3
+dropout: 0.0
 
 batch_size: 64
 num_workers: 4
@@ -33,3 +33,6 @@ wandb:
   project: eeg-task1
   run_name: null
   mode: online
+
+tiny_subset_size: 256
+tiny_subset_seed: 42

@@ -1,0 +1,18 @@
+{
+  "best_val_acc": 0.09365384615384616,
+  "best_epoch": 21,
+  "epochs": 30,
+  "device": "cuda",
+  "resolved_num_timesteps": 200,
+  "label_smoothing": 0.05,
+  "scheduler": "cosine",
+  "checkpoint_dir": "outputs/checkpoints/eegnet_residual_encoder-20260420_215546",
+  "num_train_samples": 15600,
+  "num_val_samples": 5200,
+  "best_checkpoint": "outputs/checkpoints/eegnet_residual_encoder-20260420_215546/best_model.pt",
+  "last_checkpoint": "outputs/checkpoints/eegnet_residual_encoder-20260420_215546/last_model.pt",
+  "history_csv": "outputs/logs/eegnet_residual_encoder-20260420_215546/train_history.csv",
+  "history_json": "outputs/logs/eegnet_residual_encoder-20260420_215546/train_history.json",
+  "loss_curve": "outputs/figures/eegnet_residual_encoder-20260420_215546/train_val_loss.png",
+  "acc_curve": "outputs/figures/eegnet_residual_encoder-20260420_215546/train_val_accuracy.png"
+}

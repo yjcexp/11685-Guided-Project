@@ -11,7 +11,11 @@ conda deactivate || true
 conda activate /ocean/projects/cis250019p/mzhang23/TA/envs/IDLS26 && export PYTHONNOUSERSITE=1
 
 
-interact -p GPU-shared --gres=gpu:v100-32:1 -t 4:00:00 -A cis260094p
+interact -p GPU-shared --gres=gpu:v100-32:1 -t 8:00:00 -A cis260094p
+
+set -euo pipefail
+
+cd /jet/home/jye10/Guided-Project
 
 module purge
 module load anaconda3

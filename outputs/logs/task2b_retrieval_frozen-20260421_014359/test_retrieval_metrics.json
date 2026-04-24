@@ -1,0 +1,19 @@
+{
+  "checkpoint": "outputs/checkpoints/task2b_retrieval_frozen-20260421_014359/best_model.pt",
+  "split_csv": "data/splits/test.csv",
+  "recall@1": 0.0003846153846153846,
+  "recall@5": 0.0015384615384615385,
+  "recall@10": 0.003269230769230769,
+  "precision@1": 0.0003846153846153846,
+  "precision@5": 0.00030769230769230765,
+  "precision@10": 0.000326923076923077,
+  "clipscore_matched_mean": 0.018872546032071114,
+  "clipscore_matched_std": 0.04673052579164505,
+  "clipscore_mismatched_mean": 0.0028679356910288334,
+  "clipscore_mismatched_std": 0.04869893565773964,
+  "clipscore_retrieved_mean": 0.1329004317522049,
+  "clipscore_retrieved_std": 0.02371896430850029,
+  "trainable_params": 306245,
+  "total_params": 151583558,
+  "trainable_fraction": 0.0020203048671017473
+}

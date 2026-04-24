@@ -1,0 +1,17 @@
+{
+  "best_val_acc": 0.11019230769230769,
+  "best_epoch": 19,
+  "epochs": 30,
+  "device": "cuda",
+  "label_smoothing": 0.05,
+  "scheduler": "cosine",
+  "checkpoint_dir": "outputs/checkpoints/eegnet_mlp_baseline-20260420_155740",
+  "num_train_samples": 15600,
+  "num_val_samples": 5200,
+  "best_checkpoint": "outputs/checkpoints/eegnet_mlp_baseline-20260420_155740/best_model.pt",
+  "last_checkpoint": "outputs/checkpoints/eegnet_mlp_baseline-20260420_155740/last_model.pt",
+  "history_csv": "outputs/logs/eegnet_mlp_baseline-20260420_155740/train_history.csv",
+  "history_json": "outputs/logs/eegnet_mlp_baseline-20260420_155740/train_history.json",
+  "loss_curve": "outputs/figures/eegnet_mlp_baseline-20260420_155740/train_val_loss.png",
+  "acc_curve": "outputs/figures/eegnet_mlp_baseline-20260420_155740/train_val_accuracy.png"
+}

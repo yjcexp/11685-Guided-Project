@@ -242,6 +242,8 @@ def evaluate(
             run_ids = meta_batch["run_id"]
             trial_indices = meta_batch["trial_index"]
             image_names = meta_batch.get("image_name", [None] * batch_size)
+            class_names = meta_batch.get("class_name", [None] * batch_size)
+            ids = meta_batch.get("Id", [None] * batch_size)
 
             for i in range(batch_size):
                 metadata_rows.append(
@@ -252,6 +254,8 @@ def evaluate(
                         "run_id": str(run_ids[i]),
                         "trial_index": int(trial_indices[i]),
                         "image_name": None if image_names[i] is None else str(image_names[i]),
+                        "class_name": None if class_names[i] is None else str(class_names[i]),
+                        "Id": None if ids[i] is None else str(ids[i]),
                     }
                 )
 

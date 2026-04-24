@@ -1,0 +1,22 @@
+{
+  "loss": 2.9839025886242205,
+  "accuracy": 0.10346153846153847,
+  "num_samples": 5200,
+  "checkpoint": "outputs/checkpoints/eegnet_baseline-20260322_160246/best_model.pt",
+  "split_csv": "data/splits/test.csv",
+  "per_subject_accuracy": {
+    "sub-02": 0.085,
+    "sub-03": 0.0525,
+    "sub-05": 0.1375,
+    "sub-09": 0.1125,
+    "sub-14": 0.1125,
+    "sub-15": 0.0925,
+    "sub-17": 0.12,
+    "sub-19": 0.09,
+    "sub-20": 0.0875,
+    "sub-23": 0.12,
+    "sub-24": 0.095,
+    "sub-28": 0.1625,
+    "sub-29": 0.0775
+  }
+}
